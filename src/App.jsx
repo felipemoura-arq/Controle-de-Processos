@@ -20,8 +20,8 @@ import {
    painel do Supabase → Project Settings → API → "Project URL" e
    a chave "anon public" (a chave "service_role" NUNCA vai aqui).
    ============================================================ */
-const SUPABASE_URL = "COLE_AQUI_A_URL_DO_SEU_PROJETO_SUPABASE";
-const SUPABASE_ANON_KEY = "COLE_AQUI_A_CHAVE_ANON_PUBLIC";
+const SUPABASE_URL = "https://qqgxkuryutxnbohdoaiu.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_sRGEkKQgw3XjNh_d3_uFJw_3VY52lTY";
 const SUPABASE_CONFIGURADO = SUPABASE_URL.startsWith("http");
 const supabase = createClient(
   SUPABASE_CONFIGURADO ? SUPABASE_URL : "https://placeholder.supabase.co",
