@@ -2012,9 +2012,9 @@ function gerarStatusServicoHTML(processo) {
   const status = STATUS_CONFIG[processo.statusAtual];
   const atualizacoes = processo.atualizacoes.filter((a) => a.incluirRelatorio !== false).sort((a, b) => b.data.localeCompare(a.data));
   const linhas = atualizacoes.map((a) => `<tr><td>${fmtDate(a.data)}</td><td>${a.tipo}</td><td>${rotuloResponsavel(a.responsavel)}</td><td>${a.descricao}</td></tr>`).join("");
-  const prazoProtocolo = calcularPrazo(processo.dataPrevistaProtocolo, processo.dataProtocolo);
-  const prazoConclusao = calcularPrazo(processo.dataPrevisaoOrgao, processo.dataConclusao);
-  const badgePrazo = (p) => p ? ` <span class="badge" style="background:${corPrazo(p)}22;color:${corPrazo(p)};">${labelPrazo(p)}</span>` : "";
+  /* O selo de prazo ("No prazo" / "Atrasado") NÃO sai no relatório
+     enviado ao cliente — ele continua disponível na aba
+     "Linha do tempo", para uso interno. */
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Status de Serviço — ${processo.assunto}</title><style>${printBrandCSS()}</style></head><body>
   ${brandHeader("Status de Serviço", `${processo.cliente} — ${rotuloUnidade(processo.unidade, codigoUnidadeGlobal(processo.cliente, processo.unidade))} · Gerado em ${fmtDate(hojeISOStr())}`)}
   <div class="content">
@@ -2024,10 +2024,10 @@ function gerarStatusServicoHTML(processo) {
       <div class="kv">Tipo<b>${processo.tipo}</b></div>
       <div class="kv">Status atual<b><span class="badge" style="background:${status.bg};color:${status.fg}">${statusLabel(processo.statusAtual, processo.tipo)}</span></b></div>
       <div class="kv">Nº do processo<b>${processo.numero}</b></div>
-      <div class="kv">Data de protocolo<b>${fmtDate(processo.dataProtocolo)}${badgePrazo(prazoProtocolo)}</b></div>
+      <div class="kv">Data de protocolo<b>${fmtDate(processo.dataProtocolo)}</b></div>
       <div class="kv">Nº do protocolo<b>${processo.numeroProtocolo && processo.numeroProtocolo !== "-" ? processo.numeroProtocolo : "—"}</b></div>
       <div class="kv">Previsão de análise do órgão<b>${fmtDate(processo.dataPrevisaoOrgao)}</b></div>
-      <div class="kv">Data de conclusão<b>${fmtDate(processo.dataConclusao)}${badgePrazo(prazoConclusao)}</b></div>
+      <div class="kv">Data de conclusão<b>${fmtDate(processo.dataConclusao)}</b></div>
     </div>
     ${processo.pendenciaCliente && processo.pendenciaCliente.ativa ? `<h2>Pendência do cliente</h2><p style="font-size:13px;color:#a3261b;">${processo.pendenciaCliente.descricao || "Pendência registrada sem descrição."}${processo.pendenciaCliente.previsaoRetorno ? ` — Previsão de retorno: <b>${fmtDate(processo.pendenciaCliente.previsaoRetorno)}</b>` : ""}</p>` : ""}
     <h2>Ocorrências registradas</h2>
