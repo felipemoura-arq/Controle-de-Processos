@@ -69,17 +69,36 @@ let NOME_RESPONSAVEL = "Primers";
    do menu lateral. Tudo é lido da tabela `configuracoes` e pode
    ser alterado na Área do Administrador, sem mexer no código.
    ============================================================ */
-let LOGO_ALTURA_TELA = 80;        // px, menu lateral e tela de login
-let LOGO_ALTURA_RELATORIO = 44;   // px, cabeçalho dos PDFs exportados
+/* Valores de fábrica. Servem de ponto de partida e são o que o
+   botão "Restaurar cores padrão" da Área do Administrador devolve. */
+const PADRAO_VISUAL = {
+  primaria: "#e1483d",
+  fundo: "#0a1420",
+  painel: "#101f30",
+  alturaTela: 80,
+  alturaRelatorio: 44,
+  gConcluido: "#3ecf8e",
+  gAndamento: "#4a90d9",
+  gPendente: "#8493a6",
+  gSuspenso: "#f2894b",
+  gDestaque: "#e1483d",
+  mFundo: "#101f30",
+  mTexto: "#b7c2cf",
+  mAtivo: "#e1483d",
+  mTitulo: "#eef2f6",
+};
+
+let LOGO_ALTURA_TELA = PADRAO_VISUAL.alturaTela;        // px, menu lateral e tela de login
+let LOGO_ALTURA_RELATORIO = PADRAO_VISUAL.alturaRelatorio; // px, cabeçalho dos PDFs exportados
 
 /* Uma cor por significado. Vale nos gráficos E nas etiquetas de
    status das tabelas, para o sistema inteiro falar a mesma língua. */
 const CHART = {
-  concluido: "#3ecf8e",
-  andamento: "#4a90d9",
-  pendente: "#8493a6",
-  suspenso: "#f2894b",
-  destaque: "#e1483d",
+  concluido: PADRAO_VISUAL.gConcluido,
+  andamento: PADRAO_VISUAL.gAndamento,
+  pendente: PADRAO_VISUAL.gPendente,
+  suspenso: PADRAO_VISUAL.gSuspenso,
+  destaque: PADRAO_VISUAL.gDestaque,
 };
 const CHART_LABELS = {
   concluido: "Concluído / positivo",
@@ -90,11 +109,11 @@ const CHART_LABELS = {
 };
 
 const MENU = {
-  fundo: "#101f30",
-  texto: "#b7c2cf",
-  ativo: "#e1483d",
-  ativoFundo: "rgba(225,72,61,0.16)",
-  titulo: "#eef2f6",
+  fundo: PADRAO_VISUAL.mFundo,
+  texto: PADRAO_VISUAL.mTexto,
+  ativo: PADRAO_VISUAL.mAtivo,
+  ativoFundo: hexParaRgba(PADRAO_VISUAL.mAtivo, 0.16),
+  titulo: PADRAO_VISUAL.mTitulo,
 };
 function rotuloResponsavel(valor) { return valor === "Primers" ? NOME_RESPONSAVEL : valor; }
 function hexParaRgba(hex, alpha) {
@@ -122,8 +141,8 @@ function aplicarTema(cfg) {
   LOGO_BASE64 = cfg.logo_base64 || null;
   NOME_RESPONSAVEL = cfg.nome_empresa && cfg.nome_empresa.trim() ? cfg.nome_empresa.trim() : "Primers";
 
-  LOGO_ALTURA_TELA = Number(cfg.logo_altura_tela) > 0 ? Number(cfg.logo_altura_tela) : 80;
-  LOGO_ALTURA_RELATORIO = Number(cfg.logo_altura_relatorio) > 0 ? Number(cfg.logo_altura_relatorio) : 44;
+  LOGO_ALTURA_TELA = Number(cfg.logo_altura_tela) > 0 ? Number(cfg.logo_altura_tela) : PADRAO_VISUAL.alturaTela;
+  LOGO_ALTURA_RELATORIO = Number(cfg.logo_altura_relatorio) > 0 ? Number(cfg.logo_altura_relatorio) : PADRAO_VISUAL.alturaRelatorio;
 
   if (cfg.cor_grafico_concluido) CHART.concluido = cfg.cor_grafico_concluido;
   if (cfg.cor_grafico_andamento) CHART.andamento = cfg.cor_grafico_andamento;
@@ -132,10 +151,10 @@ function aplicarTema(cfg) {
   if (cfg.cor_grafico_destaque) CHART.destaque = cfg.cor_grafico_destaque;
 
   MENU.fundo = cfg.cor_menu_fundo || COLORS.panel;
-  MENU.texto = cfg.cor_menu_texto || "#b7c2cf";
+  MENU.texto = cfg.cor_menu_texto || PADRAO_VISUAL.mTexto;
   MENU.ativo = cfg.cor_menu_ativo || COLORS.red;
   MENU.ativoFundo = hexParaRgba(MENU.ativo, 0.16);
-  MENU.titulo = cfg.cor_menu_titulo || "#eef2f6";
+  MENU.titulo = cfg.cor_menu_titulo || PADRAO_VISUAL.mTitulo;
 
   sincronizarCoresSemanticas();
 }
@@ -3799,6 +3818,30 @@ function PersonalizacaoSection({ logoBase64, onLogoAtualizado }) {
     setMsg("");
   };
 
+  /* Volta às cores e tamanhos de fábrica. Entra como RASCUNHO: você vê
+     o resultado na hora e só grava ao clicar em "Salvar alterações" —
+     ou desiste no "Descartar". O logo e o nome da empresa não são
+     tocados. */
+  const restaurarInterface = () => {
+    setCorPrimaria(PADRAO_VISUAL.primaria); setCorFundo(PADRAO_VISUAL.fundo); setCorPainel(PADRAO_VISUAL.painel);
+  };
+  const restaurarGraficos = () => {
+    setGConcluido(PADRAO_VISUAL.gConcluido); setGAndamento(PADRAO_VISUAL.gAndamento);
+    setGPendente(PADRAO_VISUAL.gPendente); setGSuspenso(PADRAO_VISUAL.gSuspenso); setGDestaque(PADRAO_VISUAL.gDestaque);
+  };
+  const restaurarMenu = () => {
+    setMFundo(PADRAO_VISUAL.mFundo); setMTexto(PADRAO_VISUAL.mTexto);
+    setMAtivo(PADRAO_VISUAL.mAtivo); setMTitulo(PADRAO_VISUAL.mTitulo);
+  };
+  const restaurarTudo = () => {
+    restaurarInterface(); restaurarGraficos(); restaurarMenu();
+    setAlturaTela(PADRAO_VISUAL.alturaTela); setAlturaRelatorio(PADRAO_VISUAL.alturaRelatorio);
+    setMsg("Cores e tamanhos voltaram ao padrão do sistema. Confira na tela e clique em \"Salvar alterações\" para gravar — ou em \"Descartar\" para desistir.");
+  };
+  const jaEstaNoPadrao = ["primaria", "fundo", "painel", "alturaTela", "alturaRelatorio",
+    "gConcluido", "gAndamento", "gPendente", "gSuspenso", "gDestaque",
+    "mFundo", "mTexto", "mAtivo", "mTitulo"].every((k) => atuais[k] === PADRAO_VISUAL[k]);
+
   const salvarTudo = async () => {
     const valor = nomeEmpresa.trim() || "Primers";
     setSalvando(true);
@@ -3819,6 +3862,17 @@ function PersonalizacaoSection({ logoBase64, onLogoAtualizado }) {
   };
 
   const rotuloSecao = { fontSize: 11.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 700, marginBottom: 12, marginTop: 26 };
+  /* Cabeçalho de seção com o atalho de restaurar só daquele grupo. */
+  const Secao = ({ titulo, onRestaurar }) => (
+    <div style={{ ...rotuloSecao, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
+      <span>{titulo}</span>
+      {onRestaurar && (
+        <button onClick={onRestaurar} style={{ background: "none", border: "none", cursor: "pointer", color: COLORS.steelLight, fontSize: 10.5, textTransform: "none", letterSpacing: 0, fontWeight: 600, textDecoration: "underline", padding: 0 }}>
+          restaurar padrão
+        </button>
+      )}
+    </div>
+  );
   const campoCor = (label, valorCor, setter, chave) => (
     <div>
       <div style={{ fontSize: 11, color: mudou(chave) ? COLORS.orange : COLORS.steel, marginBottom: 5, fontWeight: 600 }}>{label}</div>
@@ -3874,7 +3928,7 @@ function PersonalizacaoSection({ logoBase64, onLogoAtualizado }) {
         style={{ width: "100%", background: COLORS.panelAlt, border: `1px solid ${mudou("nome") ? COLORS.orange + "99" : COLORS.border}`, borderRadius: 6, padding: "9px 11px", color: COLORS.ice, fontSize: 12.5, fontFamily: FONT_SANS }} />
 
       {/* ---------- CORES DA INTERFACE ---------- */}
-      <div style={rotuloSecao}>Cores da interface</div>
+      <Secao titulo="Cores da interface" onRestaurar={restaurarInterface} />
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
         {campoCor("Cor de destaque", corPrimaria, setCorPrimaria, "primaria")}
         {campoCor("Cor de fundo", corFundo, setCorFundo, "fundo")}
@@ -3882,7 +3936,7 @@ function PersonalizacaoSection({ logoBase64, onLogoAtualizado }) {
       </div>
 
       {/* ---------- CORES DOS GRÁFICOS ---------- */}
-      <div style={rotuloSecao}>Cores dos gráficos</div>
+      <Secao titulo="Cores dos gráficos" onRestaurar={restaurarGraficos} />
       <div style={{ fontSize: 11, color: COLORS.steel, marginBottom: 12, lineHeight: 1.5 }}>
         Cada cor tem um significado e vale nos gráficos <b style={{ color: COLORS.steelLight }}>e</b> nas etiquetas de status das tabelas,
         para o sistema inteiro falar a mesma língua.
@@ -3911,7 +3965,7 @@ function PersonalizacaoSection({ logoBase64, onLogoAtualizado }) {
       </div>
 
       {/* ---------- CORES DO MENU ---------- */}
-      <div style={rotuloSecao}>Cores do menu lateral</div>
+      <Secao titulo="Cores do menu lateral" onRestaurar={restaurarMenu} />
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignContent: "start" }}>
           {campoCor("Fundo do menu", mFundo, setMFundo, "mFundo")}
@@ -3932,8 +3986,21 @@ function PersonalizacaoSection({ logoBase64, onLogoAtualizado }) {
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginTop: 24, paddingTop: 16, borderTop: `1px solid ${COLORS.border}`, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 12, color: pendentes > 0 ? COLORS.orange : COLORS.steel }}>
-          {pendentes > 0 ? `${pendentes} alteração(ões) ainda não salva(s)` : "Sem alterações pendentes"}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <button onClick={restaurarTudo} disabled={jaEstaNoPadrao} title="Devolve todas as cores e os tamanhos do logo aos valores de fábrica"
+            style={{
+              display: "flex", alignItems: "center", gap: 7, width: "fit-content",
+              background: "transparent", border: `1px solid ${jaEstaNoPadrao ? COLORS.border : COLORS.steelLight + "66"}`,
+              color: jaEstaNoPadrao ? COLORS.steel : COLORS.steelLight, borderRadius: 7, padding: "8px 14px",
+              fontSize: 12.5, fontWeight: 600, cursor: jaEstaNoPadrao ? "default" : "pointer",
+            }}>
+            <RotateCcw size={13} /> Restaurar cores padrão
+          </button>
+          <div style={{ fontSize: 11, color: pendentes > 0 ? COLORS.orange : COLORS.steel }}>
+            {pendentes > 0
+              ? `${pendentes} alteração(ões) ainda não salva(s)`
+              : jaEstaNoPadrao ? "As cores já estão no padrão do sistema." : "Sem alterações pendentes"}
+          </div>
         </div>
         <BotaoSalvar pendentes={pendentes} onSalvar={salvarTudo} onDescartar={descartar} salvando={salvando} compacto />
       </div>
