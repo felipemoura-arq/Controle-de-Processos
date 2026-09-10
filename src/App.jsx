@@ -11,7 +11,8 @@ import {
   Building2, AlertTriangle, Clock, ChevronRight, FileStack, Timer,
   ClipboardCheck, History, Download, MessageSquarePlus, CheckCircle2,
   XCircle, MinusCircle, Filter, ChevronLeft, ChevronDown, Layers,
-  Link2, Lock, Wrench, FileSignature, Pencil, Trash2, PlusCircle, LogOut, Users
+  Link2, Lock, Wrench, FileSignature, Pencil, Trash2, PlusCircle, LogOut, Users,
+  ArrowUp, ArrowDown, ArrowUpDown, Save, RotateCcw, ClipboardList
 } from "lucide-react";
 
 /* ============================================================
@@ -604,7 +605,7 @@ function gerarRelatorioHTML(processo) {
     .pend{margin:4px 0;font-size:12.5px;} .meta{font-size:12px;color:#555;margin-top:4px;}
   </style></head><body>
   <h1>Relatório de conformidade — ${processo.assunto}</h1>
-  <div class="meta">${processo.cliente} — ${processo.unidade} · ${processo.cidade}/${processo.uf} · ${processo.tipo === "Serviço Técnico" ? "Serviço" : "Processo"} nº ${processo.numero}</div>
+  <div class="meta">${processo.cliente} — ${rotuloUnidade(processo.unidade, codigoUnidadeGlobal(processo.cliente, processo.unidade))} · ${processo.cidade}/${processo.uf} · ${processo.tipo === "Serviço Técnico" ? "Serviço" : "Processo"} nº ${processo.numero}</div>
   <div class="meta">Gerado em ${fmtDate(new Date().toISOString().slice(0,10))}</div>
   <p style="margin-top:16px;">
     <span class="badge ${pronto ? "ok" : "warn"}">${pronto ? "Pronto para protocolo" : `${pendencias.length} pendência(s) para protocolo`}</span>
@@ -636,6 +637,166 @@ function imprimirRelatorio(processo) {
 /* ============================================================
    ATOMS
    ============================================================ */
+/* ============================================================
+   ORDENAÇÃO DE TABELAS — clicar no título da coluna ordena a
+   listagem (1º clique crescente, 2º decrescente, 3º volta ao
+   padrão). Usada em todas as telas com tabela.
+   ============================================================ */
+function useOrdenacao(campoInicial = null, dirInicial = "asc") {
+  const [ordem, setOrdem] = useState({ campo: campoInicial, dir: dirInicial });
+  const ordenarPor = (campo) => setOrdem((o) => {
+    if (o.campo !== campo) return { campo, dir: "asc" };
+    if (o.dir === "asc") return { campo, dir: "desc" };
+    return { campo: null, dir: "asc" };
+  });
+  return [ordem, ordenarPor];
+}
+
+function ordenarLista(lista, ordem, acessores = {}) {
+  if (!ordem || !ordem.campo) return lista;
+  const get = acessores[ordem.campo] || ((x) => x[ordem.campo]);
+  const mult = ordem.dir === "asc" ? 1 : -1;
+  const vazio = (v) => v === null || v === undefined || v === "" || v === "-" || v === "—";
+  return [...lista].sort((a, b) => {
+    const va = get(a), vb = get(b);
+    if (vazio(va) && vazio(vb)) return 0;
+    if (vazio(va)) return 1;
+    if (vazio(vb)) return -1;
+    if (typeof va === "number" && typeof vb === "number") return (va - vb) * mult;
+    if (va instanceof Date && vb instanceof Date) return (va - vb) * mult;
+    return String(va).localeCompare(String(vb), "pt-BR", { numeric: true, sensitivity: "base" }) * mult;
+  });
+}
+
+/* Cabeçalho de coluna clicável. `campo` nulo = coluna não ordenável
+   (checkbox, ações etc.), renderizada sem interação. */
+function Th({ campo, ordem, ordenarPor, children, style }) {
+  const base = {
+    textAlign: "left", padding: "10px 16px", fontSize: 10.5, color: COLORS.steel,
+    textTransform: "uppercase", letterSpacing: "0.04em", borderBottom: `1px solid ${COLORS.border}`,
+    whiteSpace: "nowrap", ...style,
+  };
+  if (!campo) return <th style={base}>{children}</th>;
+  const ativo = ordem && ordem.campo === campo;
+  const Icone = !ativo ? ArrowUpDown : ordem.dir === "asc" ? ArrowUp : ArrowDown;
+  return (
+    <th style={{ ...base, cursor: "pointer", userSelect: "none", color: ativo ? COLORS.ice : COLORS.steel }}
+      onClick={() => ordenarPor(campo)} title="Clique para ordenar">
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+        {children}
+        <Icone size={11} color={ativo ? COLORS.red : COLORS.steel} style={{ opacity: ativo ? 1 : 0.45, flexShrink: 0 }} />
+      </span>
+    </th>
+  );
+}
+
+/* ============================================================
+   RASCUNHO GLOBAL — nada é gravado no banco enquanto o usuário
+   não clicar em "Salvar alterações". Cada tela/pop-up registra
+   aqui quantas alterações tem pendentes e como aplicá-las; a
+   barra fixa no rodapé salva ou descarta tudo de uma vez.
+   ============================================================ */
+const RascunhoContext = React.createContext(null);
+function useRascunho() { return React.useContext(RascunhoContext); }
+
+function useRascunhoGlobal() {
+  const [itens, setItens] = useState({});
+  const [sinalDescarte, setSinalDescarte] = useState(0);
+  const [salvoEm, setSalvoEm] = useState(null);
+  const [salvando, setSalvando] = useState(false);
+
+  const registrar = React.useCallback((chave, qtd, aplicar) => {
+    setItens((m) => {
+      if (!qtd) {
+        if (!(chave in m)) return m;
+        const n = { ...m }; delete n[chave]; return n;
+      }
+      return { ...m, [chave]: { qtd, aplicar } };
+    });
+  }, []);
+
+  const salvarTudo = React.useCallback(async () => {
+    setSalvando(true);
+    const atuais = Object.values(itens);
+    for (const it of atuais) { try { await it.aplicar(); } catch (e) { console.error("Erro ao salvar alterações:", e); } }
+    setItens({});
+    setSalvando(false);
+    setSalvoEm(new Date());
+  }, [itens]);
+
+  const descartarTudo = React.useCallback(() => { setItens({}); setSinalDescarte((v) => v + 1); }, []);
+
+  const total = Object.values(itens).reduce((s, i) => s + i.qtd, 0);
+  return { registrar, salvarTudo, descartarTudo, total, sinalDescarte, salvoEm, salvando };
+}
+
+/* Botão padrão de salvar, usado dentro dos pop-ups e no rodapé
+   das telas que têm campos editáveis. */
+function BotaoSalvar({ pendentes, onSalvar, onDescartar, salvando, compacto }) {
+  const ativo = pendentes > 0;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      {ativo && onDescartar && (
+        <button onClick={onDescartar} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${COLORS.border}`, color: COLORS.steelLight, borderRadius: 7, padding: compacto ? "7px 12px" : "9px 16px", fontSize: 12.5, cursor: "pointer" }}>
+          <RotateCcw size={13} /> Descartar
+        </button>
+      )}
+      <button onClick={ativo ? onSalvar : undefined} disabled={!ativo || salvando} style={{
+        display: "flex", alignItems: "center", gap: 7,
+        background: ativo ? COLORS.green : "rgba(255,255,255,0.06)", border: "none",
+        color: ativo ? "#0a1420" : COLORS.steel, borderRadius: 7,
+        padding: compacto ? "7px 14px" : "9px 18px", fontSize: 12.5, fontWeight: 700,
+        cursor: ativo && !salvando ? "pointer" : "default", fontFamily: "'Oswald', sans-serif",
+        letterSpacing: "0.02em", textTransform: "uppercase",
+      }}>
+        <Save size={14} /> {salvando ? "Salvando..." : ativo ? `Salvar alterações (${pendentes})` : "Salvar alterações"}
+      </button>
+    </div>
+  );
+}
+
+/* Barra fixa no rodapé — aparece em QUALQUER tela assim que
+   existir alguma alteração ainda não gravada. */
+function BarraRascunhoGlobal() {
+  const r = useRascunho();
+  if (!r) return null;
+  if (r.total === 0) {
+    if (!r.salvoEm) return null;
+    return (
+      <div style={{ position: "fixed", right: 22, bottom: 18, zIndex: 70, background: COLORS.greenDim, border: `1px solid ${COLORS.green}55`, color: COLORS.green, borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 7 }}>
+        <CheckCircle2 size={14} /> Alterações salvas às {r.salvoEm.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+      </div>
+    );
+  }
+  return (
+    <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 70, background: COLORS.panelAlt, borderTop: `1px solid ${COLORS.orange}66`, padding: "12px 28px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, boxShadow: "0 -8px 24px rgba(0,0,0,0.35)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 13, color: COLORS.ice }}>
+        <AlertTriangle size={15} color={COLORS.orange} />
+        <b>{r.total}</b> alteração(ões) ainda não salva(s)
+        <span style={{ fontSize: 11.5, color: COLORS.steel }}>— nada foi gravado no banco de dados ainda.</span>
+      </div>
+      <BotaoSalvar pendentes={r.total} onSalvar={r.salvarTudo} onDescartar={r.descartarTudo} salvando={r.salvando} compacto />
+    </div>
+  );
+}
+
+/* Rótulo da unidade com o código da unidade na frente
+   ("ANP - AV. NILO PEÇANHA"), como no filtro de referência. */
+let CODIGOS_UNIDADE = {};
+function codigoUnidadeGlobal(cliente, unidade) { return CODIGOS_UNIDADE[`${cliente}|${unidade}`] || ""; }
+function rotuloUnidade(unidade, codigo) {
+  const c = (codigo || "").trim();
+  return c && c !== "-" ? `${c} - ${unidade}` : unidade;
+}
+function mapaCodigosUnidade(contratos) {
+  const m = {};
+  (contratos || []).forEach((c) => {
+    const cod = (c.codigoLoja || "").trim();
+    if (cod && cod !== "-") m[`${c.cliente}|${c.unidade}`] = cod;
+  });
+  return m;
+}
+
 function Pill({ children, fg, bg, stamp }) {
   return (
     <span style={{
@@ -678,152 +839,152 @@ function Select({ value, onChange, options, placeholder }) {
 }
 
 /* ============================================================
-   FILTRO DE MÚLTIPLA SELEÇÃO — abre uma lista com checkboxes e só
-   aplica de verdade quando se clica em "OK" (a seleção provisória
-   não afeta a tela até confirmar).
+   FILTER BAR (global — usada no Dashboard e em Processos)
    ============================================================ */
-function MultiSelectDropdown({ label, options, selected, onApply, width, labelFor }) {
-  const [open, setOpen] = useState(false);
-  const [temp, setTemp] = useState(selected);
-  const ref = useRef(null);
+/* ============================================================
+   FILTRO LATERAL — painel que abre pela direita, um campo por
+   grupo. Cada campo é um multi-seleção com busca, "chips" do que
+   já está escolhido, "Selecionar todos" e contador. A seleção
+   vale na hora (não precisa clicar em aplicar).
 
-  useEffect(() => { if (open) setTemp(selected); }, [open]); // eslint-disable-line
+   Grupos podem depender uns dos outros: a lista de Unidades só
+   fica disponível depois que um Cliente é escolhido, e carrega
+   apenas as unidades daquele cliente (`habilitado` + `options`
+   já filtradas por quem chama).
+   ============================================================ */
+function CampoMultiSelecao({ grupo }) {
+  const [aberto, setAberto] = useState(false);
+  const [busca, setBusca] = useState("");
+  const ref = useRef(null);
   useEffect(() => {
-    function aoClicarFora(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
-    document.addEventListener("mousedown", aoClicarFora);
-    return () => document.removeEventListener("mousedown", aoClicarFora);
+    function fora(e) { if (ref.current && !ref.current.contains(e.target)) { setAberto(false); setBusca(""); } }
+    document.addEventListener("mousedown", fora);
+    return () => document.removeEventListener("mousedown", fora);
   }, []);
 
-  const toggle = (opt) => setTemp((t) => (t.includes(opt) ? t.filter((x) => x !== opt) : [...t, opt]));
-  const exibir = (v) => (labelFor ? labelFor(v) : v);
-  const rotulo = selected.length === 0 ? label : selected.length === 1 ? exibir(selected[0]) : `${selected.length} selecionados`;
+  const exibir = grupo.labelFor || ((v) => v);
+  const bloqueado = grupo.habilitado === false;
+  const opcoes = bloqueado ? [] : (grupo.options || []);
+  const selecionados = grupo.selected || [];
+  const filtradas = busca
+    ? opcoes.filter((o) => String(exibir(o)).toLowerCase().includes(busca.toLowerCase()))
+    : opcoes;
+
+  const alternar = (opt) => grupo.onApply(selecionados.includes(opt) ? selecionados.filter((x) => x !== opt) : [...selecionados, opt]);
+
+  const placeholder = bloqueado
+    ? (grupo.mensagemBloqueio || "Selecione antes o filtro anterior...")
+    : `Buscar e selecionar ${grupo.label.toLowerCase()}...`;
 
   return (
-    <div ref={ref} style={{ position: "relative" }}>
-      <button onClick={() => setOpen((o) => !o)} style={{
-        background: COLORS.panel, border: `1px solid ${selected.length ? COLORS.red + "77" : COLORS.border}`, borderRadius: 8,
-        padding: "8px 12px", color: selected.length ? COLORS.ice : COLORS.steelLight, fontSize: 12.5, cursor: "pointer",
-        display: "flex", alignItems: "center", gap: 8, minWidth: width || 150, fontFamily: "'Inter', sans-serif",
+    <div style={{ marginBottom: 18 }} ref={ref}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+        <label style={{ fontSize: 12.5, color: COLORS.ice, fontWeight: 600 }}>{grupo.label}:</label>
+        <button disabled={bloqueado || opcoes.length === 0} onClick={() => grupo.onApply(opcoes.slice())}
+          style={{ background: "none", border: "none", cursor: bloqueado || opcoes.length === 0 ? "default" : "pointer", color: bloqueado || opcoes.length === 0 ? COLORS.steel : COLORS.red, fontSize: 11, fontWeight: 600, padding: 0 }}>
+          Selecionar todos
+        </button>
+      </div>
+
+      <div onClick={() => !bloqueado && setAberto(true)} style={{
+        position: "relative", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap",
+        background: bloqueado ? "rgba(255,255,255,0.03)" : COLORS.panel,
+        border: `1px solid ${selecionados.length ? COLORS.red + "77" : COLORS.border}`,
+        borderRadius: 7, padding: "6px 34px 6px 8px", minHeight: 38, cursor: bloqueado ? "not-allowed" : "text",
       }}>
-        <span style={{ flex: 1, textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{rotulo}</span>
-        <ChevronDown size={13} color={COLORS.steel} />
-      </button>
-      {open && (
-        <div style={{
-          position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 30, background: COLORS.panel,
-          border: `1px solid ${COLORS.borderStrong}`, borderRadius: 8, width: 240, maxHeight: 300,
-          display: "flex", flexDirection: "column", boxShadow: "0 12px 28px rgba(0,0,0,0.45)",
-        }}>
-          <div style={{ overflowY: "auto", padding: 8, flex: 1 }}>
-            {options.length === 0 && <div style={{ fontSize: 12, color: COLORS.steel, padding: 8 }}>Nenhuma opção disponível.</div>}
-            {options.map((opt) => (
-              <label key={opt} className="row-hover" style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 8px", cursor: "pointer", borderRadius: 5 }}>
-                <input type="checkbox" checked={temp.includes(opt)} onChange={() => toggle(opt)} />
-                <span style={{ fontSize: 12.5, color: COLORS.ice, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{exibir(opt)}</span>
-              </label>
-            ))}
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: 9, borderTop: `1px solid ${COLORS.border}` }}>
-            <button onClick={() => setTemp([])} style={{ background: "transparent", border: "none", color: COLORS.steel, fontSize: 11.5, cursor: "pointer" }}>Limpar</button>
-            <button onClick={() => { onApply(temp); setOpen(false); }} style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 6, padding: "6px 18px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.03em", textTransform: "uppercase" }}>
-              OK
-            </button>
-          </div>
+        {selecionados.map((v) => (
+          <span key={v} style={{ display: "flex", alignItems: "center", gap: 5, background: COLORS.redDim, color: COLORS.red, borderRadius: 5, padding: "2px 5px 2px 8px", fontSize: 11, fontWeight: 600, maxWidth: "100%" }}>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{exibir(v)}</span>
+            <button onClick={(e) => { e.stopPropagation(); alternar(v); }} style={{ background: "none", border: "none", cursor: "pointer", color: COLORS.red, display: "flex", padding: 0 }}><X size={11} /></button>
+          </span>
+        ))}
+        <input value={busca} onChange={(e) => { setBusca(e.target.value); setAberto(true); }} disabled={bloqueado}
+          placeholder={selecionados.length ? "" : placeholder}
+          style={{ flex: "1 1 90px", minWidth: 60, background: "transparent", border: "none", outline: "none", color: COLORS.ice, fontSize: 12.5, fontFamily: "'Inter', sans-serif" }} />
+        <div style={{ position: "absolute", right: 8, top: 0, bottom: 0, display: "flex", alignItems: "center", gap: 4 }}>
+          {selecionados.length > 0 && (
+            <button onClick={(e) => { e.stopPropagation(); grupo.onApply([]); }} title="Limpar" style={{ background: "none", border: "none", cursor: "pointer", color: COLORS.steel, display: "flex", padding: 0 }}><X size={14} /></button>
+          )}
+          <ChevronDown size={14} color={COLORS.steel} />
         </div>
-      )}
+
+        {aberto && !bloqueado && (
+          <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 5, background: COLORS.panel, border: `1px solid ${COLORS.borderStrong}`, borderRadius: 7, maxHeight: 230, overflowY: "auto", boxShadow: "0 12px 28px rgba(0,0,0,0.5)" }}>
+            {filtradas.length === 0 && <div style={{ padding: 12, fontSize: 12, color: COLORS.steel }}>Nenhuma opção encontrada.</div>}
+            {filtradas.map((opt) => {
+              const marcado = selecionados.includes(opt);
+              return (
+                <div key={opt} className="row-hover" onClick={(e) => { e.stopPropagation(); alternar(opt); }}
+                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", cursor: "pointer", background: marcado ? COLORS.redDim : "transparent" }}>
+                  <input type="checkbox" readOnly checked={marcado} style={{ pointerEvents: "none" }} />
+                  <span style={{ fontSize: 12.5, color: marcado ? COLORS.red : COLORS.ice, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{exibir(opt)}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      <div style={{ fontSize: 10.5, color: COLORS.steel, marginTop: 4 }}>
+        {bloqueado ? (grupo.mensagemBloqueio || "Indisponível até escolher o filtro anterior.") : `${selecionados.length} selecionado(s) de ${opcoes.length}`}
+      </div>
     </div>
   );
 }
 
-/* ============================================================
-   FILTER BAR (global — usada no Dashboard e em Processos)
-   ============================================================ */
-/* ============================================================
-   BOTÃO DE FILTRO ÚNICO — abre um pop-up com todos os grupos de
-   filtro daquela tela juntos, com botão "Aplicar" no final. Usado
-   em todas as telas com filtro, em vez de vários botões soltos.
-   ============================================================ */
 function BotaoFiltroPopup({ grupos }) {
   const [open, setOpen] = useState(false);
-  const [buscaGrupo, setBuscaGrupo] = useState({});
-  const [temp, setTemp] = useState(() => grupos.map((g) => g.selected));
-
-  useEffect(() => { if (open) { setTemp(grupos.map((g) => g.selected)); setBuscaGrupo({}); } }, [open]); // eslint-disable-line
-
-  const totalAtivos = grupos.reduce((s, g) => s + g.selected.length, 0);
-  const toggle = (gi, opt) => setTemp((t) => t.map((arr, i) => (i === gi ? (arr.includes(opt) ? arr.filter((x) => x !== opt) : [...arr, opt]) : arr)));
-  const aplicar = () => { grupos.forEach((g, i) => g.onApply(temp[i])); setOpen(false); };
-  const limparTudo = () => setTemp(grupos.map(() => []));
+  const totalAtivos = grupos.reduce((s, g) => s + (g.selected ? g.selected.length : 0), 0);
+  const limparTudo = () => grupos.forEach((g) => g.onApply([]));
 
   return (
-    <div style={{ position: "relative", display: "inline-block" }}>
-      <button onClick={() => setOpen((o) => !o)} style={{
+    <div style={{ display: "inline-block" }}>
+      <button onClick={() => setOpen(true)} style={{
         display: "flex", alignItems: "center", gap: 7, background: COLORS.panel, border: `1px solid ${totalAtivos ? COLORS.red + "77" : COLORS.border}`,
         borderRadius: 8, padding: "8px 14px", color: totalAtivos ? COLORS.ice : COLORS.steelLight, fontSize: 12.5, cursor: "pointer", fontFamily: "'Inter', sans-serif",
       }}>
         <Filter size={13} /> Filtro
         {totalAtivos > 0 && <span style={{ background: COLORS.red, color: "#fff", borderRadius: 999, minWidth: 18, height: 18, fontSize: 10.5, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 5px" }}>{totalAtivos}</span>}
       </button>
+
       {open && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 60 }} onClick={() => setOpen(false)}>
-          <div onClick={(e) => e.stopPropagation()} style={{
-            position: "absolute", top: 70, left: "50%", transform: "translateX(-50%)", background: COLORS.panel, border: `1px solid ${COLORS.borderStrong}`,
-            borderRadius: 12, padding: 22, width: "min(420px, 92vw)", maxHeight: "78vh", overflowY: "auto", boxShadow: "0 16px 40px rgba(0,0,0,0.5)",
+        <div style={{ position: "fixed", inset: 0, zIndex: 65 }}>
+          <div style={{ position: "absolute", inset: 0, background: "rgba(5,10,16,0.55)" }} onClick={() => setOpen(false)} />
+          <aside style={{
+            position: "absolute", top: 0, right: 0, bottom: 0, width: "min(470px, 94vw)",
+            background: COLORS.panelAlt, borderLeft: `1px solid ${COLORS.borderStrong}`,
+            padding: "20px 22px 30px", overflowY: "auto", boxShadow: "-14px 0 34px rgba(0,0,0,0.45)",
           }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 16, fontWeight: 600, color: COLORS.ice, textTransform: "uppercase" }}>Filtro</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: COLORS.ice }}>Filtro:</div>
               <button onClick={() => setOpen(false)} style={{ background: "none", border: "none", cursor: "pointer", color: COLORS.steel }}><X size={18} /></button>
             </div>
-            {grupos.map((g, gi) => {
-              const busca = (buscaGrupo[gi] || "").toLowerCase();
-              const opcoesFiltradas = busca ? g.options.filter((o) => (g.labelFor ? g.labelFor(o) : o).toLowerCase().includes(busca)) : g.options;
-              return (
-                <div key={g.label} style={{ marginBottom: 18 }}>
-                  <div style={{ fontSize: 11.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 700, marginBottom: 8 }}>{g.label}</div>
-                  {temp[gi].length > 0 && (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
-                      {temp[gi].map((v) => (
-                        <span key={v} style={{ display: "flex", alignItems: "center", gap: 5, background: COLORS.redDim, color: COLORS.red, borderRadius: 999, padding: "3px 6px 3px 10px", fontSize: 11 }}>
-                          {g.labelFor ? g.labelFor(v) : v}
-                          <button onClick={() => toggle(gi, v)} style={{ background: "none", border: "none", cursor: "pointer", color: COLORS.red, display: "flex" }}><X size={11} /></button>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  <input value={buscaGrupo[gi] || ""} onChange={(e) => setBuscaGrupo((b) => ({ ...b, [gi]: e.target.value }))} placeholder={`Buscar em ${g.label.toLowerCase()}...`}
-                    style={{ width: "100%", background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "7px 10px", color: COLORS.ice, fontSize: 12, marginBottom: 6 }} />
-                  <div style={{ maxHeight: 130, overflowY: "auto", border: `1px solid ${COLORS.border}`, borderRadius: 6 }}>
-                    {opcoesFiltradas.length === 0 && <div style={{ padding: 10, fontSize: 11.5, color: COLORS.steel }}>Nenhuma opção.</div>}
-                    {opcoesFiltradas.map((opt) => (
-                      <label key={opt} className="row-hover" style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", cursor: "pointer" }}>
-                        <input type="checkbox" checked={temp[gi].includes(opt)} onChange={() => toggle(gi, opt)} />
-                        <span style={{ fontSize: 12, color: COLORS.ice, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.labelFor ? g.labelFor(opt) : opt}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>
-              <button onClick={limparTudo} style={{ background: "transparent", border: "none", color: COLORS.steel, fontSize: 12, cursor: "pointer", textDecoration: "underline" }}>Limpar tudo</button>
-              <button onClick={aplicar} style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 22px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
-                Aplicar filtros
+            {grupos.map((g) => <CampoMultiSelecao key={g.label} grupo={g} />)}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>
+              <button onClick={limparTudo} style={{ background: "transparent", border: "none", color: COLORS.steel, fontSize: 12, cursor: "pointer", textDecoration: "underline" }}>Limpar todos os filtros</button>
+              <button onClick={() => setOpen(false)} style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 22px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
+                Fechar
               </button>
             </div>
-          </div>
+          </aside>
         </div>
       )}
     </div>
   );
 }
 
-function FilterBar({ processos, filtros, setFiltros }) {
+function FilterBar({ processos, filtros, setFiltros, codigosUnidade }) {
   const clientes = useMemo(() => Array.from(new Set(processos.map((p) => p.cliente))).sort(), [processos]);
+  /* Unidades só carregam depois que um cliente é escolhido — e apenas as daquele cliente. */
   const unidades = useMemo(() => {
-    const base = filtros.cliente.length ? processos.filter((p) => filtros.cliente.includes(p.cliente)) : processos;
+    if (!filtros.cliente.length) return [];
+    const base = processos.filter((p) => filtros.cliente.includes(p.cliente));
     return Array.from(new Set(base.map((p) => p.unidade))).sort();
   }, [processos, filtros.cliente]);
   const assuntos = useMemo(() => Array.from(new Set(processos.map((p) => p.assunto))).sort(), [processos]);
+  const rotuloUn = (u) => {
+    const cli = filtros.cliente[0];
+    return rotuloUnidade(u, (codigosUnidade || {})[`${cli}|${u}`] || Object.entries(codigosUnidade || {}).find(([k]) => k.endsWith(`|${u}`))?.[1]);
+  };
 
   const set = (k) => (arr) => setFiltros((f) => ({ ...f, [k]: arr, ...(k === "cliente" ? { unidade: [] } : {}) }));
   const algumFiltroAtivo = filtros.cliente.length || filtros.unidade.length || filtros.assunto.length || filtros.responsavel.length;
@@ -832,7 +993,8 @@ function FilterBar({ processos, filtros, setFiltros }) {
     <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 18 }}>
       <BotaoFiltroPopup grupos={[
         { label: "Clientes", options: clientes, selected: filtros.cliente, onApply: set("cliente") },
-        { label: "Unidades", options: unidades, selected: filtros.unidade, onApply: set("unidade") },
+        { label: "Unidades do cliente", options: unidades, selected: filtros.unidade, onApply: set("unidade"), labelFor: rotuloUn,
+          habilitado: filtros.cliente.length > 0, mensagemBloqueio: "Escolha um cliente para carregar as unidades." },
         { label: "Tipos de serviço", options: assuntos, selected: filtros.assunto, onApply: set("assunto") },
         { label: "Responsabilidade", options: RESPONSAVEIS, selected: filtros.responsavel, onApply: set("responsavel"), labelFor: rotuloResponsavel },
       ]} />
@@ -1174,84 +1336,79 @@ function RelatorioTab({ processo }) {
 /* ============================================================
    ATUALIZAÇÕES TAB (por processo)
    ============================================================ */
-function AtualizacoesTab({ processo, onUpdate }) {
-  const [form, setForm] = useState({ data: new Date().toISOString().slice(0, 10), tipo: ATUALIZACAO_TIPOS[0], descricao: "", responsavel: "Primers", incluirRelatorio: true, dataPrevistaRetorno: "" });
-  const add = () => {
-    if (!form.descricao) return;
-    const nova = { id: Date.now(), ...form };
-    onUpdate({ ...processo, atualizacoes: [nova, ...processo.atualizacoes], ultimaAtualizacao: form.data });
-    setForm((f) => ({ ...f, descricao: "", dataPrevistaRetorno: "" }));
-  };
+/* ============================================================
+   STATUS DE SERVIÇO — só leitura. Lista, do mais recente para o
+   mais antigo, TODAS as ocorrências registradas no serviço
+   (início, análise, protocolo, cobrança, exigências, tratativas
+   com o cliente, reuniões, conclusão etc.). O registro em si é
+   feito pelo botão "Registrar ocorrência", no topo do pop-up.
+   ============================================================ */
+function StatusServicoTab({ processo, onUpdate, onRegistrar, onEditar, onExcluir }) {
+  const [confirmExcluir, setConfirmExcluir] = useState(null);
   const toggleRelatorio = (id) => {
     onUpdate({ ...processo, atualizacoes: processo.atualizacoes.map((a) => (a.id === id ? { ...a, incluirRelatorio: a.incluirRelatorio === false ? true : false } : a)) });
   };
-  const labelCampo = { fontSize: 10, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.03em", display: "block", marginBottom: 4 };
+  const ocorrencias = [...(processo.atualizacoes || [])].sort((a, b) => String(b.data || "").localeCompare(String(a.data || "")));
+
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
-        <button onClick={() => imprimirStatusServico(processo)} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${COLORS.border}`, color: COLORS.steelLight, borderRadius: 7, padding: "7px 12px", fontSize: 12, cursor: "pointer" }}>
-          <Download size={13} /> Exportar status de serviço
-        </button>
-      </div>
-      <div style={{ background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 14, marginBottom: 18 }}>
-        <div style={{ fontSize: 11.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600, marginBottom: 10 }}>Registrar atualização</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10, marginBottom: 10 }}>
-          <div>
-            <label style={labelCampo}>Data</label>
-            <input type="date" value={form.data} onChange={(e) => setForm((f) => ({ ...f, data: e.target.value }))}
-              style={{ width: "100%", background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "7px 9px", color: COLORS.ice, fontSize: 12.5 }} />
-          </div>
-          <div>
-            <label style={labelCampo}>Tipo</label>
-            <select value={form.tipo} onChange={(e) => setForm((f) => ({ ...f, tipo: e.target.value }))}
-              style={{ width: "100%", background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "7px 9px", color: COLORS.ice, fontSize: 12.5 }}>
-              {ATUALIZACAO_TIPOS.map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
-          </div>
-          <div>
-            <label style={labelCampo}>Responsável</label>
-            <select value={form.responsavel} onChange={(e) => setForm((f) => ({ ...f, responsavel: e.target.value }))}
-              style={{ width: "100%", background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "7px 9px", color: COLORS.ice, fontSize: 12.5 }}>
-              {["Primers", "Cliente", "Órgão"].map((r) => <option key={r} value={r}>{rotuloResponsavel(r)}</option>)}
-            </select>
-          </div>
-          <div>
-            <label style={labelCampo}>Data prevista de retorno</label>
-            <input type="date" value={form.dataPrevistaRetorno} onChange={(e) => setForm((f) => ({ ...f, dataPrevistaRetorno: e.target.value }))}
-              style={{ width: "100%", background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "7px 9px", color: COLORS.ice, fontSize: 12.5 }} />
-          </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 11.5, color: COLORS.steel }}>
+          {ocorrencias.length} ocorrência(s) registrada(s) neste serviço.
         </div>
-        <label style={labelCampo}>Descrição</label>
-        <textarea value={form.descricao} onChange={(e) => setForm((f) => ({ ...f, descricao: e.target.value }))} placeholder="Descreva o que aconteceu..." rows={2}
-          style={{ width: "100%", background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "8px 10px", color: COLORS.ice, fontSize: 12.5, resize: "vertical", fontFamily: "'Inter', sans-serif", marginBottom: 10 }} />
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-            <input type="checkbox" checked={form.incluirRelatorio} onChange={(e) => setForm((f) => ({ ...f, incluirRelatorio: e.target.checked }))} />
-            <span style={{ fontSize: 12, color: COLORS.steelLight }}>Incluir no Relatório de Status</span>
-          </label>
-          <button onClick={add} style={{ display: "flex", alignItems: "center", gap: 6, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
-            <MessageSquarePlus size={14} /> Adicionar
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={onRegistrar} style={{ display: "flex", alignItems: "center", gap: 6, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "7px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
+            <ClipboardList size={13} /> Registrar ocorrência
+          </button>
+          <button onClick={() => imprimirStatusServico(processo)} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${COLORS.border}`, color: COLORS.steelLight, borderRadius: 7, padding: "7px 12px", fontSize: 12, cursor: "pointer" }}>
+            <Download size={13} /> Exportar
           </button>
         </div>
       </div>
 
-      {processo.atualizacoes.length === 0 && <div style={{ fontSize: 12.5, color: COLORS.steel, textAlign: "center", padding: 20 }}>Nenhuma atualização registrada ainda.</div>}
-      {processo.atualizacoes.map((a) => (
-        <div key={a.id} style={{ display: "flex", gap: 12, padding: "10px 0", borderBottom: `1px solid ${COLORS.border}` }}>
+      {ocorrencias.length === 0 && (
+        <div style={{ fontSize: 12.5, color: COLORS.steel, textAlign: "center", padding: 30, border: `1px dashed ${COLORS.border}`, borderRadius: 8 }}>
+          Nenhuma ocorrência registrada ainda. Use "Registrar ocorrência" para lançar o início, o protocolo, uma exigência, uma tratativa com o cliente, uma reunião ou a conclusão.
+        </div>
+      )}
+
+      {ocorrencias.map((a) => (
+        <div key={a.id} className="row-hover" style={{ display: "flex", gap: 12, padding: "11px 6px", borderBottom: `1px solid ${COLORS.border}`, borderRadius: 6 }}>
           <div style={{ width: 74, flexShrink: 0, fontSize: 11.5, color: COLORS.steel, fontFamily: "monospace" }}>{fmtDate(a.data)}</div>
-          <div style={{ flex: 1 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 3, flexWrap: "wrap" }}>
               <Pill fg={COLORS.steelLight} bg="rgba(255,255,255,0.06)">{a.tipo}</Pill>
-              <span style={{ fontSize: 10.5, color: COLORS.steel }}>resp.: {rotuloResponsavel(a.responsavel)}</span>{a.dataPrevistaRetorno && <span style={{ fontSize: 10.5, color: COLORS.orange }}>· retorno previsto: {fmtDate(a.dataPrevistaRetorno)}</span>}
+              <span style={{ fontSize: 10.5, color: COLORS.steel }}>resp.: {rotuloResponsavel(a.responsavel)}</span>
+              {a.dataPrevistaRetorno && <span style={{ fontSize: 10.5, color: COLORS.orange }}>· retorno previsto: {fmtDate(a.dataPrevistaRetorno)}</span>}
+              {a.naAgenda && <span style={{ fontSize: 10.5, color: COLORS.blue }}>· na agenda</span>}
+              {a.editadaEm && <span style={{ fontSize: 10.5, color: COLORS.steel, fontStyle: "italic" }}>· editada em {fmtDate(a.editadaEm)}</span>}
             </div>
-            <div style={{ fontSize: 12.5, color: COLORS.ice, lineHeight: 1.5 }}>{a.descricao}</div>
+            <div style={{ fontSize: 12.5, color: COLORS.ice, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{a.descricao}</div>
+            {a.resumoCampos && <div style={{ fontSize: 11, color: COLORS.steel, marginTop: 4, fontStyle: "italic" }}>{a.resumoCampos}</div>}
           </div>
-          <label title="Marcar para aparecer no Relatório de Status" style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, cursor: "pointer", alignSelf: "flex-start" }}>
-            <input type="checkbox" checked={a.incluirRelatorio !== false} onChange={() => toggleRelatorio(a.id)} />
-            <span style={{ fontSize: 10, color: COLORS.steel, whiteSpace: "nowrap" }}>Relatório</span>
-          </label>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flexShrink: 0 }}>
+            <label title="Marcar para aparecer no Relatório de Status" style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+              <input type="checkbox" checked={a.incluirRelatorio !== false} onChange={() => toggleRelatorio(a.id)} />
+              <span style={{ fontSize: 10, color: COLORS.steel, whiteSpace: "nowrap" }}>Relatório</span>
+            </label>
+            <button onClick={() => onEditar(a)} title="Editar esta ocorrência"
+              style={{ background: "transparent", border: `1px solid ${COLORS.border}`, borderRadius: 6, width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+              <Pencil size={12} color={COLORS.steelLight} />
+            </button>
+            <button onClick={() => setConfirmExcluir(a)} title="Excluir esta ocorrência"
+              style={{ background: "transparent", border: `1px solid ${COLORS.red}55`, borderRadius: 6, width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+              <Trash2 size={12} color={COLORS.red} />
+            </button>
+          </div>
         </div>
       ))}
+
+      {confirmExcluir && (
+        <ConfirmarExclusaoModal titulo="Excluir ocorrência"
+          mensagem={`Excluir a ocorrência "${confirmExcluir.tipo}" de ${fmtDate(confirmExcluir.data)}? O texto e o registro somem do Status de Serviço. As datas e o status que essa ocorrência já aplicou ao processo continuam como estão — se precisar, ajuste na aba "Visão geral".`}
+          onCancelar={() => setConfirmExcluir(null)}
+          onConfirmar={() => { onExcluir(confirmExcluir); setConfirmExcluir(null); }} />
+      )}
     </div>
   );
 }
@@ -1260,120 +1417,281 @@ function AtualizacoesTab({ processo, onUpdate }) {
    PROCESS DETAIL MODAL (Visão geral / Checklist / Atualizações)
    ============================================================ */
 /* ============================================================
-   PRÓXIMA AÇÃO GUIADA — cada status sabe qual é o próximo passo,
-   quais datas pedir, e para qual status avançar. Adapta os
-   rótulos conforme o serviço é Processo ou Serviço Técnico.
+   REGISTRAR OCORRÊNCIA — substitui o antigo "próximo passo".
+   Tudo o que acontece no processo/serviço é lançado aqui: o tipo
+   escolhido define quais datas o formulário pede e para qual
+   status o serviço avança (quando for o caso). Além das datas,
+   toda ocorrência tem descrição livre, data do registro,
+   previsão de retorno, responsável e vínculo com a agenda.
    ============================================================ */
 function hojeISOStr() { return new Date().toISOString().slice(0, 10); }
 
-function nextActionConfig(processo) {
+const OCORRENCIA_TIPOS = [
+  {
+    id: "inicio", label: "Início do serviço", statusDestino: "iniciado",
+    campos: [
+      { key: "dataInicio", label: "Data de início", type: "date", padrao: "hoje" },
+      { key: "dataPrevisaoAnaliseChecklist", label: "Previsão de conclusão da análise documental / checklist", type: "date" },
+    ],
+  },
+  {
+    id: "analise", label: "Análise documental / checklist concluída", statusDestino: "em_montagem",
+    campos: [
+      { key: "dataPrevistaProtocolo", label: "Data prevista de protocolo", type: "date", soProcesso: true },
+      { key: "dataPrevistaVistoria", label: "Data prevista de vistoria", type: "date", soTecnico: true },
+    ],
+  },
+  {
+    id: "protocolo", label: "Protocolo do processo", statusDestino: "protocolado", soProcesso: true,
+    campos: [
+      { key: "dataProtocolo", label: "Data de protocolo", type: "date", padrao: "hoje" },
+      { key: "numeroProtocolo", label: "Número do protocolo", type: "text" },
+      { key: "dataPrevisaoOrgao", label: "Previsão de análise do órgão", type: "date" },
+    ],
+  },
+  {
+    id: "execucao", label: "Início da execução do serviço técnico", statusDestino: "protocolado", soTecnico: true,
+    campos: [{ key: "dataPrevisaoOrgao", label: "Previsão de conclusão / entrega", type: "date" }],
+  },
+  { id: "tramitacao", label: "Tramitação / Movimentação processual", statusDestino: null, campos: [] },
+  { id: "cobranca", label: "Cobrança de celeridade ao órgão", statusDestino: null, campos: [], registraCobranca: true },
+  {
+    id: "exigencia_recebida", label: "Exigência / Comunique-se recebido", statusDestino: "exigencia_primers",
+    campos: [
+      { key: "dataExigenciaRecebida", label: "Data de recebimento da exigência", type: "date", padrao: "hoje" },
+      { key: "dataExigenciaPrazoLimite", label: "Prazo limite para atendimento", type: "date" },
+    ],
+  },
+  { id: "exigencia_cliente", label: "Pendência repassada ao cliente", statusDestino: "exigencia_cliente", campos: [], pendenciaCliente: true },
+  { id: "retorno_cliente", label: "Retorno do cliente", statusDestino: null, campos: [] },
+  {
+    id: "exigencia_atendida", label: "Exigência atendida", statusDestino: "exigencia_atendida",
+    campos: [
+      { key: "dataAtendimentoTecnico", label: "Data do atendimento técnico (esclarecimentos)", type: "date" },
+      { key: "dataAtendimentoExigencia", label: "Data em que a exigência foi atendida", type: "date", padrao: "hoje" },
+      { key: "dataPrevisaoOrgao", label: "Nova previsão de análise do órgão", type: "date" },
+    ],
+  },
+  { id: "vistoria", label: "Vistoria", statusDestino: null, campos: [{ key: "dataPrevistaVistoria", label: "Data da vistoria", type: "date", padrao: "hoje" }] },
+  { id: "reuniao", label: "Reunião / Atendimento", statusDestino: null, campos: [] },
+  { id: "tratativa", label: "Tratativa com o cliente", statusDestino: null, campos: [] },
+  { id: "suspensao", label: "Suspensão do serviço", statusDestino: "suspenso", campos: [] },
+  {
+    id: "conclusao", label: "Conclusão / Deferimento", statusDestino: "concluido",
+    campos: [{ key: "dataConclusao", label: "Data de conclusão", type: "date", padrao: "hoje" }],
+  },
+  {
+    id: "indeferimento", label: "Indeferimento", statusDestino: "indeferido",
+    campos: [{ key: "dataConclusao", label: "Data do indeferimento", type: "date", padrao: "hoje" }],
+  },
+  { id: "outro", label: "Outro", statusDestino: null, campos: [] },
+];
+
+function tiposOcorrenciaDisponiveis(processo) {
+  const tecnico = processo.tipo === "Serviço Técnico";
+  return OCORRENCIA_TIPOS.filter((t) => (tecnico ? !t.soProcesso : !t.soTecnico));
+}
+
+/* Sugere o tipo mais provável a partir de onde o serviço está. */
+function tipoOcorrenciaSugerido(processo) {
   const tecnico = processo.tipo === "Serviço Técnico";
   switch (processo.statusAtual) {
-    case "aguardando":
-      return {
-        titulo: "Iniciar serviço", textoBotao: "Iniciar Serviço",
-        campos: [
-          { key: "dataInicio", label: "Data de início", type: "date", default: hojeISOStr() },
-          { key: "dataPrevisaoAnaliseChecklist", label: "Previsão de conclusão da análise documental / checklist", type: "date" },
-        ],
-        aplicar: (v) => ({ statusAtual: "iniciado", ...v }),
-        resumo: () => "Serviço iniciado.",
-      };
-    case "iniciado":
-      return {
-        titulo: "Concluir análise e checklist", textoBotao: "Concluir análise/checklist",
-        campos: [
-          { key: tecnico ? "dataPrevistaVistoria" : "dataPrevistaProtocolo", label: tecnico ? "Data prevista de vistoria (se aplicável)" : "Data prevista de protocolo", type: "date" },
-        ],
-        aplicar: (v) => ({ statusAtual: "em_montagem", ...v }),
-        resumo: () => "Análise documental e checklist concluídos — processo em montagem.",
-      };
-    case "em_montagem":
-      return tecnico ? {
-        titulo: "Registrar início da execução", textoBotao: "Registrar execução em andamento",
-        campos: [
-          { key: "dataPrevisaoEntrega", label: "Previsão de conclusão / entrega", type: "date" },
-        ],
-        aplicar: (v) => ({ statusAtual: "protocolado", ...v }),
-        resumo: () => "Serviço técnico em execução.",
-      } : {
-        titulo: "Registrar protocolo", textoBotao: "Registrar protocolo",
-        campos: [
-          { key: "dataProtocolo", label: "Data de protocolo", type: "date", default: hojeISOStr() },
-          { key: "numeroProtocolo", label: "Número do protocolo", type: "text" },
-          { key: "dataPrevisaoOrgao", label: "Previsão de análise do órgão", type: "date" },
-        ],
-        aplicar: (v) => ({ statusAtual: "protocolado", ...v }),
-        resumo: (v) => `Processo protocolado${v.dataProtocolo ? ` em ${fmtDate(v.dataProtocolo)}` : ""}${v.numeroProtocolo ? ` (nº ${v.numeroProtocolo})` : ""}.`,
-      };
+    case "aguardando": return "inicio";
+    case "iniciado": return "analise";
+    case "em_montagem": return tecnico ? "execucao" : "protocolo";
     case "protocolado":
     case "aguardando_orgao":
-    case "exigencia_atendida":
-      return {
-        titulo: tecnico ? "Registrar pendência ou ajuste" : "Registrar Comunique-se / Exigência",
-        textoBotao: tecnico ? "Registrar pendência" : "Registrar exigência recebida",
-        campos: [
-          { key: "dataExigenciaRecebida", label: tecnico ? "Data da pendência" : "Data de recebimento da exigência", type: "date", default: hojeISOStr() },
-          { key: "dataExigenciaPrazoLimite", label: "Data limite para atendimento", type: "date" },
-        ],
-        aplicar: (v) => ({ statusAtual: "exigencia_primers", ...v }),
-        resumo: () => tecnico ? "Pendência registrada." : "Comunique-se / exigência recebida.",
-      };
-    case "exigencia_primers":
-    case "exigencia_cliente":
-      return {
-        titulo: "Registrar atendimento", textoBotao: "Marcar exigência atendida",
-        campos: [
-          { key: "dataAtendimentoTecnico", label: "Data de atendimento técnico (esclarecimentos)", type: "date" },
-          { key: "dataAtendimentoExigencia", label: "Data em que foi atendida", type: "date", default: hojeISOStr() },
-          { key: "dataPrevisaoOrgao", label: "Nova previsão de análise do órgão", type: "date" },
-        ],
-        aplicar: (v) => ({ statusAtual: "exigencia_atendida", ...v }),
-        resumo: () => "Exigência atendida — processo passa para Exigência atendida / Aguardando análise.",
-      };
-    default:
-      return null;
+    case "exigencia_atendida": return "tramitacao";
+    case "exigencia_primers": return "exigencia_atendida";
+    case "exigencia_cliente": return "retorno_cliente";
+    default: return "tramitacao";
   }
 }
 
-function TransitionModal({ processo, config, onClose, onSave }) {
-  const [valores, setValores] = useState(() => {
-    const iniciais = {};
-    config.campos.forEach((c) => { iniciais[c.key] = processo[c.key] || c.default || ""; });
-    return iniciais;
-  });
-  return (
-    <ModalShell title={config.titulo} onClose={onClose} maxWidth={440}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        {config.campos.map((c) => (
-          <ModalField key={c.key} label={c.label}>
-            <input type={c.type} value={valores[c.key] || ""} onChange={(e) => setValores((v) => ({ ...v, [c.key]: e.target.value }))} style={modalInputStyle} />
-          </ModalField>
-        ))}
-      </div>
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
-        <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${COLORS.border}`, color: COLORS.steelLight, borderRadius: 7, padding: "9px 16px", fontSize: 13, cursor: "pointer" }}>Cancelar</button>
-        <button onClick={() => { onSave(config.aplicar(valores), config.resumo(valores)); onClose(); }}
-          style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.03em", textTransform: "uppercase" }}>
-          {config.textoBotao}
-        </button>
-      </div>
-    </ModalShell>
-  );
+function camposDoTipo(tipoCfg, processo) {
+  const tecnico = processo.tipo === "Serviço Técnico";
+  return (tipoCfg.campos || []).filter((c) => (tecnico ? !c.soProcesso : !c.soTecnico));
 }
 
-function ConcluirModal({ onClose, onSave }) {
-  const [data, setData] = useState(hojeISOStr());
+function RegistrarOcorrenciaModal({ processo, onClose, onSalvar, tipoInicial, emEdicao }) {
+  const disponiveis = tiposOcorrenciaDisponiveis(processo);
+  const editando = !!emEdicao;
+  const [tipoId, setTipoId] = useState(
+    editando ? (emEdicao.tipoOcorrencia || "outro") : (tipoInicial || tipoOcorrenciaSugerido(processo))
+  );
+  const tipoCfg = disponiveis.find((t) => t.id === tipoId) || disponiveis[0];
+  const campos = camposDoTipo(tipoCfg, processo);
+
+  const [valores, setValores] = useState(editando ? { ...(emEdicao.camposAplicados || {}) } : {});
+  const [descricao, setDescricao] = useState(editando ? (emEdicao.descricao || "") : "");
+  const [dataRegistro, setDataRegistro] = useState(editando ? (emEdicao.data || hojeISOStr()) : hojeISOStr());
+  const [previsaoRetorno, setPrevisaoRetorno] = useState(editando ? (emEdicao.dataPrevistaRetorno || "") : "");
+  const [responsavel, setResponsavel] = useState(editando ? (emEdicao.responsavel || "Primers") : "Primers");
+  const [incluirRelatorio, setIncluirRelatorio] = useState(editando ? emEdicao.incluirRelatorio !== false : true);
+  const [criarAgenda, setCriarAgenda] = useState(!editando);
+  /* Na edição, o padrão é NÃO mexer no processo — a pessoa está só
+     corrigindo o texto ou a data do registro. Se marcar a opção, as
+     datas e o status daquele tipo são reaplicados. */
+  const [reaplicar, setReaplicar] = useState(!editando);
+  const [tipoTocado, setTipoTocado] = useState(false);
+
+  /* Ao trocar o tipo, recarrega os campos daquele tipo com o que já
+     existe no processo (ou o padrão de hoje). Na primeira montagem
+     em modo edição, mantém o que foi gravado na ocorrência. */
+  useEffect(() => {
+    if (editando && !tipoTocado) return;
+    const iniciais = {};
+    camposDoTipo(tipoCfg, processo).forEach((c) => {
+      iniciais[c.key] = processo[c.key] || (c.padrao === "hoje" ? hojeISOStr() : "");
+    });
+    setValores(iniciais);
+  }, [tipoId]); // eslint-disable-line
+
+  const trocarTipo = (novo) => { setTipoTocado(true); setTipoId(novo); if (editando) setReaplicar(true); };
+
+  const registrar = () => {
+    if (!descricao.trim()) return;
+    const resumo = campos
+      .filter((c) => valores[c.key])
+      .map((c) => `${c.label}: ${c.type === "date" ? fmtDate(valores[c.key]) : valores[c.key]}`)
+      .join(" · ");
+    const camposAplicados = {};
+    campos.forEach((c) => { if (valores[c.key]) camposAplicados[c.key] = valores[c.key]; });
+    const ocorrencia = {
+      id: editando ? emEdicao.id : `oc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      tipoOcorrencia: tipoCfg.id,
+      tipo: tipoCfg.label,
+      data: dataRegistro,
+      descricao: descricao.trim(),
+      responsavel,
+      dataPrevistaRetorno: previsaoRetorno || "",
+      incluirRelatorio,
+      resumoCampos: resumo,
+      camposAplicados,
+      naAgenda: editando ? (emEdicao.naAgenda || !!(criarAgenda && previsaoRetorno)) : !!(criarAgenda && previsaoRetorno),
+      ...(editando ? { editadaEm: hojeISOStr() } : {}),
+    };
+
+    const camposProcesso = {};
+    if (!editando || reaplicar) {
+      Object.assign(camposProcesso, camposAplicados);
+      if (tipoCfg.statusDestino) camposProcesso.statusAtual = tipoCfg.statusDestino;
+      if (tipoCfg.pendenciaCliente) {
+        camposProcesso.pendenciaCliente = { ativa: true, descricao: descricao.trim(), previsaoRetorno: previsaoRetorno || "" };
+      }
+      if (tipoCfg.id === "retorno_cliente") {
+        camposProcesso.pendenciaCliente = { ...(processo.pendenciaCliente || {}), ativa: false };
+      }
+    }
+
+    const agenda = (criarAgenda && previsaoRetorno) ? {
+      data: previsaoRetorno,
+      titulo: `${processo.cliente} — ${tipoCfg.label}`,
+      tipo: tipoCfg.id === "reuniao" ? "Reunião" : "Tarefa",
+      tecnico: processo.tecnico && processo.tecnico !== "-" ? processo.tecnico : "",
+      descricao: `${processo.assunto} (${processo.unidade}) — ${descricao.trim()}`,
+    } : null;
+    const cobranca = (tipoCfg.registraCobranca && !editando) ? { id: ocorrencia.id, data: dataRegistro, nota: descricao.trim() } : null;
+    onSalvar(ocorrencia, camposProcesso, agenda, cobranca, editando);
+    onClose();
+  };
+
+  const labelCampo = { fontSize: 10.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.03em", display: "block", marginBottom: 4, fontWeight: 600 };
+  const inputBase = { width: "100%", background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "8px 10px", color: COLORS.ice, fontSize: 12.5, fontFamily: "'Inter', sans-serif", outline: "none" };
+
   return (
-    <ModalShell title="Marcar Concluído / Deferido" onClose={onClose} maxWidth={400}>
-      <ModalField label="Data de conclusão">
-        <input type="date" value={data} onChange={(e) => setData(e.target.value)} style={modalInputStyle} />
-      </ModalField>
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
+    <ModalShell title={editando ? "Editar ocorrência" : "Registrar ocorrência"} onClose={onClose} maxWidth={620}>
+      <div style={{ fontSize: 11.5, color: COLORS.steel, marginBottom: 14 }}>
+        {processo.cliente} · {processo.unidade} — {processo.assunto}
+      </div>
+
+      <div style={{ marginBottom: 14 }}>
+        <label style={labelCampo}>Tipo de ocorrência</label>
+        <select value={tipoId} onChange={(e) => trocarTipo(e.target.value)} style={inputBase}>
+          {disponiveis.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+        </select>
+        {tipoCfg.statusDestino && (!editando || reaplicar) && (
+          <div style={{ fontSize: 11, color: COLORS.orange, marginTop: 5 }}>
+            Ao salvar, o serviço passa para: <b>{statusLabel(tipoCfg.statusDestino, processo.tipo)}</b>
+          </div>
+        )}
+      </div>
+
+      {editando && (
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer", background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 7, padding: "10px 12px", marginBottom: 14 }}>
+          <input type="checkbox" checked={reaplicar} onChange={(e) => setReaplicar(e.target.checked)} style={{ marginTop: 2 }} />
+          <span style={{ fontSize: 12, color: COLORS.steelLight, lineHeight: 1.5 }}>
+            Reaplicar as datas e o status deste tipo ao processo.
+            <br />
+            <span style={{ fontSize: 11, color: COLORS.steel }}>
+              Deixe desmarcado se você só quer corrigir o texto, a data do registro ou o responsável — assim o processo não é alterado.
+            </span>
+          </span>
+        </label>
+      )}
+
+      {campos.length > 0 && (
+        <div style={{ background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 14, marginBottom: 14 }}>
+          <div style={{ fontSize: 10.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 700, marginBottom: 10 }}>Dados desta etapa</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            {campos.map((c) => (
+              <div key={c.key} style={{ gridColumn: campos.length === 1 ? "1 / -1" : "auto" }}>
+                <label style={labelCampo}>{c.label}</label>
+                <input type={c.type} value={valores[c.key] || ""} onChange={(e) => setValores((v) => ({ ...v, [c.key]: e.target.value }))}
+                  style={{ ...inputBase, background: COLORS.panel }} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ marginBottom: 14 }}>
+        <label style={labelCampo}>O que aconteceu <span style={{ color: COLORS.red }}>*</span></label>
+        <textarea value={descricao} onChange={(e) => setDescricao(e.target.value)} rows={4}
+          placeholder="Descreva a ocorrência: o que foi feito, o que o órgão ou o cliente respondeu, o que ficou combinado..."
+          style={{ ...inputBase, resize: "vertical", lineHeight: 1.5 }} />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 14 }}>
+        <div>
+          <label style={labelCampo}>Data do registro</label>
+          <input type="date" value={dataRegistro} onChange={(e) => setDataRegistro(e.target.value)} style={inputBase} />
+        </div>
+        <div>
+          <label style={labelCampo}>Previsão de retorno</label>
+          <input type="date" value={previsaoRetorno} onChange={(e) => setPrevisaoRetorno(e.target.value)} style={inputBase} />
+        </div>
+        <div>
+          <label style={labelCampo}>Responsável</label>
+          <select value={responsavel} onChange={(e) => setResponsavel(e.target.value)} style={inputBase}>
+            {["Primers", "Cliente", "Órgão"].map((r) => <option key={r} value={r}>{rotuloResponsavel(r)}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 6 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+          <input type="checkbox" checked={incluirRelatorio} onChange={(e) => setIncluirRelatorio(e.target.checked)} />
+          <span style={{ fontSize: 12, color: COLORS.steelLight }}>Incluir no Relatório de Status enviado ao cliente</span>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: previsaoRetorno ? "pointer" : "default", opacity: previsaoRetorno ? 1 : 0.5 }}>
+          <input type="checkbox" disabled={!previsaoRetorno} checked={criarAgenda && !!previsaoRetorno} onChange={(e) => setCriarAgenda(e.target.checked)} />
+          <span style={{ fontSize: 12, color: COLORS.steelLight }}>
+            {editando ? "Criar um NOVO compromisso na agenda na data de previsão de retorno" : "Criar compromisso na agenda na data de previsão de retorno"}
+            {!previsaoRetorno && <span style={{ color: COLORS.steel }}> (preencha a previsão de retorno)</span>}
+            {editando && previsaoRetorno && <span style={{ color: COLORS.steel }}> — o compromisso antigo, se houver, continua na agenda</span>}
+          </span>
+        </label>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
         <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${COLORS.border}`, color: COLORS.steelLight, borderRadius: 7, padding: "9px 16px", fontSize: 13, cursor: "pointer" }}>Cancelar</button>
-        <button onClick={() => { onSave({ statusAtual: "concluido", dataConclusao: data }); onClose(); }}
-          style={{ background: COLORS.green, border: "none", color: "#0a1420", borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.03em", textTransform: "uppercase" }}>
-          Concluído / Deferido
+        <button onClick={registrar} disabled={!descricao.trim()} style={{
+          background: descricao.trim() ? COLORS.red : "rgba(255,255,255,0.06)", border: "none",
+          color: descricao.trim() ? "#fff" : COLORS.steel, borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700,
+          cursor: descricao.trim() ? "pointer" : "default", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.03em", textTransform: "uppercase",
+        }}>
+          {editando ? "Salvar ocorrência" : "Registrar ocorrência"}
         </button>
       </div>
     </ModalShell>
@@ -1496,7 +1814,7 @@ function printBrandCSS() {
 function brandHeader(title, subtitle) {
   const logoHtml = LOGO_BASE64
     ? `<img src="${LOGO_BASE64}" style="max-height:44px;max-width:200px;object-fit:contain;" />`
-    : `<span class="brand-name">CONTROLE DE PROCESSOS</span>`;
+    : `<span class="brand-name">CONTROLE DE PROCESSOS E SERVIÇOS</span>`;
   return `<div class="brand">
     <div class="brand-row">${logoHtml}</div>
     <div class="brand-title">${title}</div>
@@ -1520,9 +1838,10 @@ function gerarStatusServicoHTML(processo) {
   const prazoConclusao = calcularPrazo(processo.dataPrevisaoOrgao, processo.dataConclusao);
   const badgePrazo = (p) => p ? ` <span class="badge" style="background:${corPrazo(p)}22;color:${corPrazo(p)};">${labelPrazo(p)}</span>` : "";
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Status de Serviço — ${processo.assunto}</title><style>${printBrandCSS()}</style></head><body>
-  ${brandHeader("Status de Serviço", `${processo.cliente} — ${processo.unidade} · Gerado em ${fmtDate(hojeISOStr())}`)}
+  ${brandHeader("Status de Serviço", `${processo.cliente} — ${rotuloUnidade(processo.unidade, codigoUnidadeGlobal(processo.cliente, processo.unidade))} · Gerado em ${fmtDate(hojeISOStr())}`)}
   <div class="content">
     <div class="grid">
+      <div class="kv">Código da unidade<b>${codigoUnidadeGlobal(processo.cliente, processo.unidade) || "—"}</b></div>
       <div class="kv">Serviço<b>${processo.assunto}</b></div>
       <div class="kv">Tipo<b>${processo.tipo}</b></div>
       <div class="kv">Status atual<b><span class="badge" style="background:${status.bg};color:${status.fg}">${statusLabel(processo.statusAtual, processo.tipo)}</span></b></div>
@@ -1533,8 +1852,8 @@ function gerarStatusServicoHTML(processo) {
       <div class="kv">Data de conclusão<b>${fmtDate(processo.dataConclusao)}${badgePrazo(prazoConclusao)}</b></div>
     </div>
     ${processo.pendenciaCliente && processo.pendenciaCliente.ativa ? `<h2>Pendência do cliente</h2><p style="font-size:13px;color:#a3261b;">${processo.pendenciaCliente.descricao || "Pendência registrada sem descrição."}${processo.pendenciaCliente.previsaoRetorno ? ` — Previsão de retorno: <b>${fmtDate(processo.pendenciaCliente.previsaoRetorno)}</b>` : ""}</p>` : ""}
-    <h2>Histórico de atualizações</h2>
-    <table><tr><th>Data</th><th>Tipo</th><th>Responsável</th><th>Descrição</th></tr>${linhas || `<tr><td colspan="4">Nenhuma atualização registrada.</td></tr>`}</table>
+    <h2>Ocorrências registradas</h2>
+    <table><tr><th>Data</th><th>Tipo</th><th>Responsável</th><th>Descrição</th></tr>${linhas || `<tr><td colspan="4">Nenhuma ocorrência registrada.</td></tr>`}</table>
   </div>
   <div class="footer">Controle de Processos e Serviços</div>
   </body></html>`;
@@ -1561,15 +1880,15 @@ function gerarStatusServicoGeralHTML(processos, tituloCliente) {
   const linhas = processos.map((p) => {
     const st = STATUS_CONFIG[p.statusAtual];
     const ultima = [...p.atualizacoes].filter((a) => a.incluirRelatorio !== false).sort((a, b) => b.data.localeCompare(a.data))[0];
-    return `<tr><td>${p.cliente}</td><td>${p.unidade}</td><td>${p.assunto}</td><td>${p.tipo}</td>
+    return `<tr><td>${p.cliente}</td><td>${codigoUnidadeGlobal(p.cliente, p.unidade) || "—"}</td><td>${p.unidade}</td><td>${p.assunto}</td><td>${p.tipo}</td>
       <td><span class="badge" style="background:${st.bg};color:${st.fg}">${statusLabel(p.statusAtual, p.tipo)}</span></td>
       <td>${fmtDate(p.ultimaAtualizacao)}</td><td>${ultima ? ultima.descricao : "—"}</td></tr>`;
   }).join("");
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Status de Serviço${tituloCliente ? " — " + tituloCliente : ""}</title><style>${printBrandCSS()}</style></head><body>
   ${brandHeader("Status de Serviço", `${tituloCliente || "Todos os clientes"} · Gerado em ${fmtDate(hojeISOStr())} · ${processos.length} serviço(s)`)}
   <div class="content">
-    <table><tr><th>Cliente</th><th>Unidade</th><th>Serviço</th><th>Tipo</th><th>Status</th><th>Última atualização</th><th>Última mensagem</th></tr>
-    ${linhas || `<tr><td colspan="7">Nenhum serviço encontrado.</td></tr>`}</table>
+    <table><tr><th>Cliente</th><th>Cód. unidade</th><th>Unidade</th><th>Serviço</th><th>Tipo</th><th>Status</th><th>Última atualização</th><th>Última mensagem</th></tr>
+    ${linhas || `<tr><td colspan="8">Nenhum serviço encontrado.</td></tr>`}</table>
   </div>
   <div class="footer">Controle de Processos e Serviços</div>
   </body></html>`;
@@ -1608,38 +1927,68 @@ function gerarRankingHTML(linhas, chaveMes) {
 }
 function imprimirRanking(linhas, chaveMes) { abrirEImprimir(gerarRankingHTML(linhas, chaveMes)); }
 
-function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpenProcesso, onConcluir }) {
+function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpenProcesso, codigoUnidade, pendentes, onSalvar, onDescartar, salvando }) {
   const [tab, setTab] = useState("geral");
   const [showSenha, setShowSenha] = useState(false);
-  const [showAction, setShowAction] = useState(false);
-  const [showConcluir, setShowConcluir] = useState(false);
+  const [showOcorrencia, setShowOcorrencia] = useState(false);
+  const [ocorrenciaEmEdicao, setOcorrenciaEmEdicao] = useState(null);
+  const [confirmarSaida, setConfirmarSaida] = useState(false);
   const status = STATUS_CONFIG[processo.statusAtual];
   const prazo = prazoInfo(diasRestantes(processo));
   const parado = diasSemAtualizacao(processo);
   const bloqueadoPor = processoBloqueado(processo, processos);
-  const acao = nextActionConfig(processo);
   const parcelasDoServico = useMemo(() => (contratos || []).filter((c) => c.proposta === processo.numeroContrato && c.cliente === processo.cliente && c.unidade === processo.unidade && c.servico === processo.assunto), [contratos, processo]);
   const temParcelaFinal = parcelasDoServico.length === 0 || parcelasDoServico.some((c) => /deferiment|entrega|obten/i.test(c.tarefa || ""));
-  const podeConcluir = !status.final && temParcelaFinal;
   const iniciado = processo.statusAtual !== "aguardando";
 
   const patch = (fields) => onUpdate({ ...processo, ...fields });
-  const aplicarTransicao = (fields, resumo) => {
-    const hojeISO = hojeISOStr();
-    const nova = { id: `transicao-${Date.now()}`, data: hojeISO, tipo: "Tramitação / Movimentação processual", descricao: resumo, responsavel: "Primers" };
-    onUpdate({ ...processo, ...fields, ultimaAtualizacao: hojeISO, atualizacoes: [nova, ...processo.atualizacoes] });
-  };
-  const aplicarConclusao = (fields) => {
-    const hojeISO = hojeISOStr();
-    const nova = { id: `conclusao-${Date.now()}`, data: fields.dataConclusao || hojeISO, tipo: "Tramitação / Movimentação processual", descricao: "Serviço concluído / deferido.", responsavel: "Primers" };
-    const novo = { ...processo, ...fields, ultimaAtualizacao: hojeISO, atualizacoes: [nova, ...processo.atualizacoes] };
-    if (onConcluir) onConcluir(novo); else onUpdate(novo);
+
+  /* Uma ocorrência entra no rascunho junto com os campos do processo
+     que ela altera; só vai para o banco no "Salvar alterações". */
+  const aplicarOcorrencia = (ocorrencia, camposProcesso, agenda, cobranca, editando) => {
+    const lista = processo.atualizacoes || [];
+    const novasAtualizacoes = editando
+      ? lista.map((a) => (a.id === ocorrencia.id ? ocorrencia : a))
+      : [ocorrencia, ...lista];
+    const novo = {
+      ...processo,
+      ...camposProcesso,
+      ultimaAtualizacao: novasAtualizacoes.reduce((max, a) => (String(a.data || "") > max ? a.data : max), ""),
+      atualizacoes: novasAtualizacoes,
+    };
+    if (!novo.ultimaAtualizacao) novo.ultimaAtualizacao = processo.ultimaAtualizacao;
+    if (cobranca) novo.cobrancas = [cobranca, ...(processo.cobrancas || [])];
+    /* O compromisso de agenda fica no rascunho junto com o resto — só é
+       criado de verdade quando o usuário clicar em "Salvar alterações". */
+    if (agenda) novo.__agendaPendente = [...(processo.__agendaPendente || []), agenda];
+    onUpdate(novo);
   };
 
-  const registrarCobranca = () => {
-    const nova = { data: hojeISOStr(), nota: "Cobrança de celeridade registrada." };
-    patch({ cobrancas: [nova, ...processo.cobrancas] });
+  /* Excluir uma ocorrência remove o registro do histórico. As datas e o
+     status que ela já aplicou ao processo continuam como estão — quem
+     apagou pode corrigi-los na aba "Visão geral". Se a ocorrência era
+     uma cobrança, a cobrança correspondente também sai; e se ela ainda
+     tinha um compromisso de agenda só no rascunho, ele é descartado. */
+  const excluirOcorrencia = (ocorrencia) => {
+    const restantes = (processo.atualizacoes || []).filter((a) => a.id !== ocorrencia.id);
+    const tituloAgenda = `${processo.cliente} — ${ocorrencia.tipo}`;
+    const novo = {
+      ...processo,
+      atualizacoes: restantes,
+      cobrancas: (processo.cobrancas || []).filter((c) => c.id !== ocorrencia.id),
+      __agendaPendente: (processo.__agendaPendente || []).filter(
+        (item) => !(item.titulo === tituloAgenda && item.data === ocorrencia.dataPrevistaRetorno)
+      ),
+    };
+    if (!novo.__agendaPendente.length) delete novo.__agendaPendente;
+    novo.ultimaAtualizacao = restantes.reduce((max, a) => (String(a.data || "") > max ? a.data : max), "") || processo.dataInicio || processo.ultimaAtualizacao;
+    onUpdate(novo);
   };
+
+  const abrirEdicaoOcorrencia = (a) => { setOcorrenciaEmEdicao(a); setShowOcorrencia(true); };
+  const fecharOcorrencia = () => { setShowOcorrencia(false); setOcorrenciaEmEdicao(null); };
+
+  const fechar = () => { if (pendentes > 0) setConfirmarSaida(true); else onClose(); };
 
   const Row = ({ label, value }) => (
     <div style={{ display: "flex", justifyContent: "space-between", padding: "9px 0", borderBottom: `1px solid ${COLORS.border}` }}>
@@ -1656,10 +2005,10 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
         <div style={{ padding: "18px 22px 14px", borderBottom: `1px solid ${COLORS.border}` }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
             <div>
-              <div style={{ fontSize: 11, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em" }}>{processo.cliente} · {processo.unidade}</div>
+              <div style={{ fontSize: 11, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em" }}>{processo.cliente} · {rotuloUnidade(processo.unidade, codigoUnidade)}</div>
               <h2 style={{ fontFamily: "'Oswald', sans-serif", fontSize: 18, color: COLORS.ice, fontWeight: 600, marginTop: 3 }}>{processo.assunto}</h2>
             </div>
-            <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: COLORS.steel }}><X size={20} /></button>
+            <button onClick={fechar} style={{ background: "none", border: "none", cursor: "pointer", color: COLORS.steel }}><X size={20} /></button>
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
             <select value={processo.statusAtual} onChange={(e) => patch({ statusAtual: e.target.value })}
@@ -1692,26 +2041,20 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
             </div>
           )}
 
-          {(acao || podeConcluir) && (
-            <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap", alignItems: "center", background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "10px 12px" }}>
-              <span style={{ fontSize: 11, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.03em", fontWeight: 700 }}>Próximo passo:</span>
-              {acao && (
-                <button onClick={() => setShowAction(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "7px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
-                  {acao.textoBotao}
-                </button>
-              )}
-              {podeConcluir && processo.statusAtual !== "aguardando" && (
-                <button onClick={() => setShowConcluir(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${COLORS.green}55`, color: COLORS.green, borderRadius: 7, padding: "7px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
-                  <CheckCircle2 size={13} /> Concluído / Deferido
-                </button>
-              )}
-              {!temParcelaFinal && !status.final && processo.statusAtual !== "aguardando" && (
-                <span style={{ fontSize: 11, color: COLORS.steel, fontStyle: "italic" }}>
-                  "Concluído/Deferido" só fica disponível quando houver uma parcela de Deferimento, Entrega ou Obtenção neste serviço.
-                </span>
-              )}
-            </div>
-          )}
+          <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap", alignItems: "center", background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "10px 12px" }}>
+            <span style={{ fontSize: 11, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.03em", fontWeight: 700 }}>Registrar ocorrência:</span>
+            <button onClick={() => { setOcorrenciaEmEdicao(null); setShowOcorrencia(true); }} style={{ display: "flex", alignItems: "center", gap: 6, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "7px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
+              <ClipboardList size={14} /> Nova ocorrência
+            </button>
+            <span style={{ fontSize: 11, color: COLORS.steel, fontStyle: "italic", flex: 1, minWidth: 200 }}>
+              Início, análise, protocolo, cobrança, exigências, tratativas, reuniões, conclusão — tudo é lançado aqui e aparece em Status de Serviço.
+            </span>
+            {!temParcelaFinal && !status.final && iniciado && (
+              <span style={{ fontSize: 10.5, color: COLORS.orange }}>
+                Atenção: este serviço não tem tarefa de Deferimento/Entrega/Obtenção cadastrada.
+              </span>
+            )}
+          </div>
         </div>
 
         {/* BODY */}
@@ -1721,13 +2064,14 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
               <Clock size={34} color={COLORS.steel} style={{ marginBottom: 14 }} />
               <div style={{ fontSize: 15, color: COLORS.ice, fontFamily: "'Oswald', sans-serif", fontWeight: 600, marginBottom: 6 }}>Este serviço ainda não foi iniciado</div>
               <div style={{ fontSize: 12.5, color: COLORS.steel, marginBottom: 20, maxWidth: 380, marginLeft: "auto", marginRight: "auto" }}>
-                Clique em "Iniciar Serviço" para registrar a data de início e a previsão de conclusão da análise documental / checklist. Documentos, Checklist, Linha do tempo e Status de Serviço ficam disponíveis depois disso.
+                Registre a ocorrência de "Início do serviço" para lançar a data de início e a previsão de conclusão da análise documental / checklist. Documentos, Checklist, Linha do tempo e Status de Serviço ficam disponíveis depois disso.
               </div>
-              <button onClick={() => setShowAction(true)} style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 8, padding: "11px 24px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.03em", textTransform: "uppercase" }}>
-                Iniciar Serviço
+              <button onClick={() => { setOcorrenciaEmEdicao(null); setShowOcorrencia(true); }} style={{ display: "inline-flex", alignItems: "center", gap: 8, background: COLORS.red, border: "none", color: "#fff", borderRadius: 8, padding: "11px 24px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.03em", textTransform: "uppercase" }}>
+                <ClipboardList size={15} /> Registrar início do serviço
               </button>
               <div style={{ marginTop: 24, textAlign: "left", maxWidth: 380, marginLeft: "auto", marginRight: "auto" }}>
                 <Row label="Cliente / Unidade" value={`${processo.cliente} — ${processo.unidade}`} />
+                <Row label="Código da unidade" value={codigoUnidade || "—"} />
                 <Row label="Tipo de serviço" value={processo.tipo} />
                 <Row label="Técnico" value={processo.tecnico} />
                 <Row label="Contrato vinculado" value={processo.numeroContrato} />
@@ -1738,6 +2082,7 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
           {iniciado && tab === "geral" && (
             <div>
               <Row label="Cliente" value={processo.cliente} />
+              <Row label="Código da unidade" value={codigoUnidade || "—"} />
               <Row label="Unidade" value={processo.unidade} />
               <Row label="Serviço" value={processo.assunto} />
               <Row label="Tipo de serviço" value={processo.tipo} />
@@ -1792,12 +2137,12 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
 
               <div style={{ marginTop: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div style={{ fontSize: 11.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}>Cobranças de celeridade</div>
-                <button onClick={registrarCobranca} style={{ display: "flex", alignItems: "center", gap: 5, background: "transparent", border: `1px solid ${COLORS.border}`, color: COLORS.steelLight, borderRadius: 6, padding: "5px 10px", fontSize: 11.5, cursor: "pointer" }}>
+                <button onClick={() => { setOcorrenciaEmEdicao(null); setShowOcorrencia(true); }} style={{ display: "flex", alignItems: "center", gap: 5, background: "transparent", border: `1px solid ${COLORS.border}`, color: COLORS.steelLight, borderRadius: 6, padding: "5px 10px", fontSize: 11.5, cursor: "pointer" }}>
                   <Plus size={12} /> Registrar cobrança
                 </button>
               </div>
               {processo.cobrancas.length === 0 ? (
-                <div style={{ fontSize: 12, color: COLORS.steel, padding: "10px 0" }}>Nenhuma cobrança registrada.</div>
+                <div style={{ fontSize: 12, color: COLORS.steel, padding: "10px 0" }}>Nenhuma cobrança registrada. Use "Registrar ocorrência" com o tipo "Cobrança de celeridade ao órgão".</div>
               ) : processo.cobrancas.map((c, i) => (
                 <div key={i} style={{ fontSize: 12, color: COLORS.steelLight, padding: "6px 0", borderBottom: `1px solid ${COLORS.border}` }}>{fmtDate(c.data)} — {c.nota}</div>
               ))}
@@ -1856,12 +2201,36 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
           )}
           {iniciado && tab === "documentos" && <DocumentosChecklistTab processo={processo} onUpdate={onUpdate} />}
           {iniciado && tab === "linhadotempo" && <LinhaDoTempoTab processo={processo} />}
-          {iniciado && tab === "atualizacoes" && <AtualizacoesTab processo={processo} onUpdate={onUpdate} />}
+          {iniciado && tab === "atualizacoes" && (
+            <StatusServicoTab processo={processo} onUpdate={onUpdate}
+              onRegistrar={() => { setOcorrenciaEmEdicao(null); setShowOcorrencia(true); }}
+              onEditar={abrirEdicaoOcorrencia} onExcluir={excluirOcorrencia} />
+          )}
           {iniciado && tab === "relatorio" && <RelatorioTab processo={processo} />}
         </div>
+
+        {/* RODAPÉ — nada é gravado enquanto não clicar em Salvar */}
+        <div style={{ borderTop: `1px solid ${COLORS.border}`, background: pendentes > 0 ? COLORS.orangeDim : COLORS.panelAlt, padding: "11px 22px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 12, color: pendentes > 0 ? COLORS.orange : COLORS.steel, display: "flex", alignItems: "center", gap: 7 }}>
+            {pendentes > 0
+              ? <><AlertTriangle size={14} /> {pendentes} alteração(ões) neste serviço ainda não salva(s)</>
+              : <><CheckCircle2 size={14} /> Sem alterações pendentes neste serviço</>}
+          </div>
+          <BotaoSalvar pendentes={pendentes} onSalvar={onSalvar} onDescartar={onDescartar} salvando={salvando} compacto />
+        </div>
       </div>
-      {showAction && acao && <TransitionModal processo={processo} config={acao} onClose={() => setShowAction(false)} onSave={aplicarTransicao} />}
-      {showConcluir && <ConcluirModal onClose={() => setShowConcluir(false)} onSave={aplicarConclusao} />}
+
+      {showOcorrencia && (
+        <RegistrarOcorrenciaModal key={ocorrenciaEmEdicao ? ocorrenciaEmEdicao.id : "nova"}
+          processo={processo} emEdicao={ocorrenciaEmEdicao}
+          onClose={fecharOcorrencia} onSalvar={aplicarOcorrencia} />
+      )}
+      {confirmarSaida && (
+        <ConfirmarExclusaoModal titulo="Fechar sem salvar?"
+          mensagem={`Há ${pendentes} alteração(ões) não salva(s) neste serviço. Se fechar agora, elas serão perdidas.`}
+          onCancelar={() => setConfirmarSaida(false)}
+          onConfirmar={() => { setConfirmarSaida(false); if (onDescartar) onDescartar(); onClose(); }} />
+      )}
     </div>
   );
 }
@@ -1972,7 +2341,9 @@ function compromissosDoProcesso(p) {
   if (p.dataPrevisaoOrgao) lista.push({ data: p.dataPrevisaoOrgao, label: tecnico ? "Previsão de entrega" : "Previsão de análise do órgão" });
   if (p.dataExigenciaPrazoLimite) lista.push({ data: p.dataExigenciaPrazoLimite, label: "Prazo limite da exigência" });
   if (p.pendenciaCliente && p.pendenciaCliente.ativa && p.pendenciaCliente.previsaoRetorno) lista.push({ data: p.pendenciaCliente.previsaoRetorno, label: "Previsão de retorno — pendência do cliente" });
-  (p.atualizacoes || []).forEach((a) => { if (a.dataPrevistaRetorno) lista.push({ data: a.dataPrevistaRetorno, label: `Retorno previsto: ${a.tipo}` }); });
+  /* Ocorrências com "naAgenda" já viraram compromisso de verdade na agenda —
+     não repetimos aqui para não aparecer duas vezes no mesmo dia. */
+  (p.atualizacoes || []).forEach((a) => { if (a.dataPrevistaRetorno && !a.naAgenda) lista.push({ data: a.dataPrevistaRetorno, label: `Retorno previsto: ${a.tipo}` }); });
   return lista;
 }
 
@@ -2151,21 +2522,29 @@ function AgendaSemanal({ processos, agendaItens, onOpenProcesso, onAddItem, onRe
 }
 
 
-function AtualizacoesPage({ processos, onOpenProcesso }) {
+function AtualizacoesPage({ processos, onOpenProcesso, codigosUnidade }) {
   const [filtroCliente, setFiltroCliente] = useState([]);
+  const [filtroUnidade, setFiltroUnidade] = useState([]);
   const [filtroTecnico, setFiltroTecnico] = useState([]);
   const [filtroTipo, setFiltroTipo] = useState([]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
   const clientes = useMemo(() => Array.from(new Set(processos.map((p) => p.cliente))).sort(), [processos]);
+  const unidades = useMemo(() => {
+    if (!filtroCliente.length) return [];
+    return Array.from(new Set(processos.filter((p) => filtroCliente.includes(p.cliente)).map((p) => p.unidade))).sort();
+  }, [processos, filtroCliente]);
+  const rotuloUn = (u) => rotuloUnidade(u, (codigosUnidade || {})[`${filtroCliente[0]}|${u}`]);
 
   const processosFiltrados = useMemo(() => processos.filter((p) => {
     if (filtroCliente.length && !filtroCliente.includes(p.cliente)) return false;
+    if (filtroUnidade.length && !filtroUnidade.includes(p.unidade)) return false;
     if (filtroTecnico.length && !filtroTecnico.includes(p.tecnico)) return false;
     return true;
-  }), [processos, filtroCliente, filtroTecnico]);
+  }), [processos, filtroCliente, filtroUnidade, filtroTecnico]);
 
+  const [ordem, ordenarPor] = useOrdenacao("data", "desc");
   const feed = useMemo(() => {
     const items = [];
     processosFiltrados.forEach((p) => {
@@ -2175,16 +2554,22 @@ function AtualizacoesPage({ processos, onOpenProcesso }) {
         items.push({ ...a, processo: p });
       });
     });
-    return items.sort((a, b) => new Date(b.data) - new Date(a.data));
-  }, [processosFiltrados, filtroTipo]);
+    const base = items.sort((a, b) => new Date(b.data) - new Date(a.data));
+    return ordenarLista(base, ordem, {
+      cliente: (a) => a.processo.cliente,
+      unidade: (a) => a.processo.unidade,
+      servico: (a) => a.processo.assunto,
+      tecnico: (a) => a.processo.tecnico,
+    });
+  }, [processosFiltrados, filtroTipo, ordem]);
   const paginado = useMemo(() => paginate(feed, page, pageSize), [feed, page, pageSize]);
 
   const exportarCSV = () => {
-    const rows = [["Cliente", "Unidade", "Assunto", "Status atual", "Responsável", "Data protocolo", "Previsão órgão", "Última atualização", "Última mensagem"]];
+    const rows = [["Cliente", "Código da unidade", "Unidade", "Assunto", "Status atual", "Responsável", "Data protocolo", "Previsão órgão", "Última atualização", "Última mensagem"]];
     processosFiltrados.forEach((p) => {
       const ultima = p.atualizacoes[0];
       rows.push([
-        p.cliente, p.unidade, p.assunto, statusLabel(p.statusAtual, p.tipo), rotuloResponsavel(STATUS_CONFIG[p.statusAtual].responsavel),
+        p.cliente, (codigosUnidade || {})[`${p.cliente}|${p.unidade}`] || "", p.unidade, p.assunto, statusLabel(p.statusAtual, p.tipo), rotuloResponsavel(STATUS_CONFIG[p.statusAtual].responsavel),
         fmtDate(p.dataProtocolo), fmtDate(p.dataPrevisaoOrgao), fmtDate(p.ultimaAtualizacao), ultima ? ultima.descricao : "",
       ]);
     });
@@ -2196,7 +2581,9 @@ function AtualizacoesPage({ processos, onOpenProcesso }) {
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 18, justifyContent: "space-between" }}>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <BotaoFiltroPopup grupos={[
-            { label: "Clientes", options: clientes, selected: filtroCliente, onApply: (v) => { setFiltroCliente(v); setPage(1); } },
+            { label: "Clientes", options: clientes, selected: filtroCliente, onApply: (v) => { setFiltroCliente(v); setFiltroUnidade([]); setPage(1); } },
+            { label: "Unidades do cliente", options: unidades, selected: filtroUnidade, onApply: (v) => { setFiltroUnidade(v); setPage(1); }, labelFor: rotuloUn,
+              habilitado: filtroCliente.length > 0, mensagemBloqueio: "Escolha um cliente para carregar as unidades." },
             { label: "Técnicos", options: TECNICOS_OPTIONS, selected: filtroTecnico, onApply: (v) => { setFiltroTecnico(v); setPage(1); } },
             { label: "Tipos de atualização", options: ATUALIZACAO_TIPOS, selected: filtroTipo, onApply: (v) => { setFiltroTipo(v); setPage(1); } },
           ]} />
@@ -2213,14 +2600,22 @@ function AtualizacoesPage({ processos, onOpenProcesso }) {
       </div>
 
       <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "4px 0" }}>
-        {feed.length === 0 && <div style={{ padding: 30, textAlign: "center", color: COLORS.steel, fontSize: 13 }}>Nenhuma atualização encontrada com esses filtros.</div>}
+        <table style={{ tableLayout: "fixed" }}><thead><tr>
+          <Th campo="data" ordem={ordem} ordenarPor={ordenarPor} style={{ padding: "9px 18px", width: 110 }}>Data</Th>
+          <Th campo="cliente" ordem={ordem} ordenarPor={ordenarPor} style={{ padding: "9px 8px" }}>Cliente</Th>
+          <Th campo="unidade" ordem={ordem} ordenarPor={ordenarPor} style={{ padding: "9px 8px" }}>Unidade</Th>
+          <Th campo="servico" ordem={ordem} ordenarPor={ordenarPor} style={{ padding: "9px 8px" }}>Serviço</Th>
+          <Th campo="tipo" ordem={ordem} ordenarPor={ordenarPor} style={{ padding: "9px 8px" }}>Tipo de ocorrência</Th>
+          <Th campo="tecnico" ordem={ordem} ordenarPor={ordenarPor} style={{ padding: "9px 18px", width: 130 }}>Técnico</Th>
+        </tr></thead></table>
+        {feed.length === 0 && <div style={{ padding: 30, textAlign: "center", color: COLORS.steel, fontSize: 13 }}>Nenhuma ocorrência encontrada com esses filtros.</div>}
         {paginado.map((a) => (
           <div key={a.id} className="row-hover" onClick={() => onOpenProcesso(a.processo)} style={{ display: "flex", gap: 14, padding: "12px 18px", borderBottom: `1px solid ${COLORS.border}`, cursor: "pointer" }}>
             <div style={{ width: 78, flexShrink: 0, fontSize: 11.5, color: COLORS.steel, fontFamily: "monospace" }}>{fmtDate(a.data)}</div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 3 }}>
                 <span style={{ fontSize: 13, fontWeight: 600, color: COLORS.ice }}>{a.processo.cliente}</span>
-                <span style={{ fontSize: 11.5, color: COLORS.steel }}>{a.processo.unidade}</span>
+                <span style={{ fontSize: 11.5, color: COLORS.steel }}>{rotuloUnidade(a.processo.unidade, (codigosUnidade || {})[`${a.processo.cliente}|${a.processo.unidade}`])}</span>
                 <Pill fg={COLORS.steelLight} bg="rgba(255,255,255,0.06)">{a.tipo}</Pill>
                 <span style={{ fontSize: 10.5, color: COLORS.steel }}>resp.: {rotuloResponsavel(a.responsavel)}</span>{a.dataPrevistaRetorno && <span style={{ fontSize: 10.5, color: COLORS.orange }}>· retorno previsto: {fmtDate(a.dataPrevistaRetorno)}</span>}
               </div>
@@ -2245,7 +2640,7 @@ const CONTRATO_HEADER_MAP = {
   proposta: ["Proposta"],
   cliente: ["Cliente"],
   unidade: ["Unidade"],
-  codigoLoja: ["Código Loja", "Codigo Loja", "Código  Loja"],
+  codigoLoja: ["Código Loja", "Codigo Loja", "Código  Loja", "Código da Unidade", "Codigo da Unidade", "Código Unidade", "Codigo Unidade"],
   servico: ["Serviço", "Servico"],
   tarefa: ["Tarefa"],
   tecnico: ["Técnico", "Tecnico"],
@@ -2713,17 +3108,21 @@ function NovoEventoModal({ onClose, onSave }) {
   );
 }
 
-function TreinamentosPage({ eventos, onAddEvento, onUpdateEvento, onExcluirEventos }) {
+function TreinamentosPage({ eventos, onAddEvento, onExcluirEventos, edits, onEdit }) {
   const [showNovo, setShowNovo] = useState(false);
   const [selecionados, setSelecionados] = useState(new Set());
   const [confirmExcluir, setConfirmExcluir] = useState(false);
+  const rascunho = useRascunho();
   const ordenados = useMemo(() => [...eventos].sort((a, b) => b.data.localeCompare(a.data)), [eventos]);
+  const presencasDe = (ev) => (edits && edits[ev.id] && edits[ev.id].presencas) ? edits[ev.id].presencas : ev.presencas;
+  const pendentesAqui = Object.keys(edits || {}).length;
 
   const toggleSel = (id) => setSelecionados((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+        <BotaoSalvar pendentes={pendentesAqui} onSalvar={rascunho ? rascunho.salvarTudo : undefined} onDescartar={rascunho ? rascunho.descartarTudo : undefined} salvando={rascunho ? rascunho.salvando : false} compacto />
         <button onClick={() => setShowNovo(true)} style={{ display: "flex", alignItems: "center", gap: 7, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
           <Plus size={15} /> Novo treinamento / comissão
         </button>
@@ -2743,13 +3142,16 @@ function TreinamentosPage({ eventos, onAddEvento, onUpdateEvento, onExcluirEvent
             </div>
           </div>
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap", paddingLeft: 26 }}>
-            {ev.tecnicosObrigatorios.map((t) => (
-              <label key={t} style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer" }}>
-                <input type="checkbox" checked={!!ev.presencas[t]} onChange={(e) => onUpdateEvento(ev.id, { presencas: { ...ev.presencas, [t]: e.target.checked } })} />
-                <span style={{ fontSize: 12.5, color: COLORS.ice }}>{t}</span>
-                <Pill fg={ev.presencas[t] ? COLORS.green : COLORS.steel} bg={ev.presencas[t] ? COLORS.greenDim : "rgba(255,255,255,0.06)"}>{ev.presencas[t] ? "Presente" : "Ausente"}</Pill>
-              </label>
-            ))}
+            {ev.tecnicosObrigatorios.map((t) => {
+              const pres = presencasDe(ev);
+              return (
+                <label key={t} style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer" }}>
+                  <input type="checkbox" checked={!!pres[t]} onChange={(e) => onEdit(ev.id, "presencas", { ...pres, [t]: e.target.checked })} />
+                  <span style={{ fontSize: 12.5, color: COLORS.ice }}>{t}</span>
+                  <Pill fg={pres[t] ? COLORS.green : COLORS.steel} bg={pres[t] ? COLORS.greenDim : "rgba(255,255,255,0.06)"}>{pres[t] ? "Presente" : "Ausente"}</Pill>
+                </label>
+              );
+            })}
           </div>
         </div>
       ))}
@@ -2813,6 +3215,7 @@ function RankingTecnicosPage({ contratos, processos, eventos }) {
   };
 
   const corPct = (v) => v === null ? COLORS.steel : v >= 80 ? COLORS.green : v >= 50 ? COLORS.orange : COLORS.red;
+  const [ordem, ordenarPor] = useOrdenacao();
 
   return (
     <div>
@@ -2836,11 +3239,18 @@ function RankingTecnicosPage({ contratos, processos, eventos }) {
       <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, overflow: "hidden" }}>
         <div style={{ overflowX: "auto" }}>
           <table>
-            <thead><tr>{["Técnico", "Metas do mês", "Concluídas", "% Metas atingidas", "Retrabalhos (exigências)", "Eventos obrigatórios", "Presenças", "% Participação"].map((h) => (
-              <th key={h} style={{ textAlign: "left", padding: "10px 16px", fontSize: 10.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", borderBottom: `1px solid ${COLORS.border}`, whiteSpace: "nowrap" }}>{h}</th>
-            ))}</tr></thead>
+            <thead><tr>
+              <Th campo="tecnico" ordem={ordem} ordenarPor={ordenarPor}>Técnico</Th>
+              <Th campo="totalPlanejado" ordem={ordem} ordenarPor={ordenarPor}>Metas do mês</Th>
+              <Th campo="concluidos" ordem={ordem} ordenarPor={ordenarPor}>Concluídas</Th>
+              <Th campo="pctMetas" ordem={ordem} ordenarPor={ordenarPor}>% Metas atingidas</Th>
+              <Th campo="retrabalhos" ordem={ordem} ordenarPor={ordenarPor}>Retrabalhos (exigências)</Th>
+              <Th campo="totalEventos" ordem={ordem} ordenarPor={ordenarPor}>Eventos obrigatórios</Th>
+              <Th campo="presentes" ordem={ordem} ordenarPor={ordenarPor}>Presenças</Th>
+              <Th campo="pctTreinamentos" ordem={ordem} ordenarPor={ordenarPor}>% Participação</Th>
+            </tr></thead>
             <tbody>
-              {linhas.map((l) => (
+              {ordenarLista(linhas, ordem).map((l) => (
                 <tr key={l.tecnico} style={{ borderBottom: `1px solid ${COLORS.border}` }}>
                   <td style={{ padding: "12px 16px", fontSize: 13, fontWeight: 600, color: COLORS.ice }}>{l.tecnico}</td>
                   <td style={{ padding: "12px 16px", fontSize: 13, color: COLORS.steelLight }}>{l.totalPlanejado}</td>
@@ -2875,7 +3285,7 @@ const TELA_LABELS = {
   "unidades": "Unidades de clientes",
   "contratos": "Serviços contratados",
   "importar-contratos": "Importar novos clientes/serviços",
-  "processos": "Controle de Processos",
+  "processos": "Controle de Processos e Serviços",
   "atualizacoes": "Relatório de Status",
   "treinamentos": "Treinamentos e Comissões",
   "ranking": "Ranking de Técnicos",
@@ -3028,7 +3438,7 @@ function GerenciarAcessosPage({ usuarioLogado, logoBase64, onLogoAtualizado }) {
       <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, overflow: "hidden" }}>
         <div style={{ fontSize: 11.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 700, padding: "14px 18px 10px" }}>Acessos cadastrados</div>
         <table>
-          <thead><tr>{["Usuário", "Nome", "Papel", ""].map((h) => (
+          <thead><tr>{["Usuário", "Nome", "Papel", ""].map((h, i) => (
             <th key={h} style={{ textAlign: "left", padding: "8px 18px", fontSize: 10.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", borderBottom: `1px solid ${COLORS.border}` }}>{h}</th>
           ))}</tr></thead>
           <tbody>
@@ -3139,22 +3549,34 @@ function PersonalizacaoSection({ logoBase64, onLogoAtualizado }) {
     setSalvandoLogo(false);
     if (!error) { onLogoAtualizado(null); setMsg("Logo removido."); }
   };
-  const salvarNome = async () => {
-    const valor = nomeEmpresa.trim() || "Primers";
-    setSalvandoNome(true);
-    const { error } = await supabase.from("configuracoes").update({ nome_empresa: valor }).eq("id", 1);
-    setSalvandoNome(false);
-    if (error) { setMsg("Erro ao salvar o nome: " + error.message); return; }
-    NOME_RESPONSAVEL = valor;
-    setMsg("Nome salvo — recarregue a página (F5) para ver aplicado em todo o sistema.");
+  /* Nome e cores ficam como rascunho até o clique em "Salvar alterações". */
+  const originais = useRef({ nome: NOME_RESPONSAVEL, primaria: COLORS.red, fundo: COLORS.bg, painel: COLORS.panel });
+  const pendentes =
+    (nomeEmpresa.trim() !== originais.current.nome ? 1 : 0) +
+    (corPrimaria !== originais.current.primaria ? 1 : 0) +
+    (corFundo !== originais.current.fundo ? 1 : 0) +
+    (corPainel !== originais.current.painel ? 1 : 0);
+
+  const descartar = () => {
+    setNomeEmpresa(originais.current.nome);
+    setCorPrimaria(originais.current.primaria);
+    setCorFundo(originais.current.fundo);
+    setCorPainel(originais.current.painel);
+    setMsg("");
   };
-  const salvarCores = async () => {
-    setSalvandoCores(true);
-    const { error } = await supabase.from("configuracoes").update({ cor_primaria: corPrimaria, cor_fundo: corFundo, cor_painel: corPainel }).eq("id", 1);
-    setSalvandoCores(false);
-    if (error) { setMsg("Erro ao salvar as cores: " + error.message); return; }
+
+  const salvarTudo = async () => {
+    const valor = nomeEmpresa.trim() || "Primers";
+    setSalvandoNome(true); setSalvandoCores(true);
+    const { error } = await supabase.from("configuracoes")
+      .update({ nome_empresa: valor, cor_primaria: corPrimaria, cor_fundo: corFundo, cor_painel: corPainel })
+      .eq("id", 1);
+    setSalvandoNome(false); setSalvandoCores(false);
+    if (error) { setMsg("Erro ao salvar: " + error.message); return; }
+    NOME_RESPONSAVEL = valor;
     aplicarTema({ cor_primaria: corPrimaria, cor_fundo: corFundo, cor_painel: corPainel });
-    setMsg("Cores salvas — recarregue a página (F5) para ver aplicado em 100% do sistema.");
+    originais.current = { nome: valor, primaria: corPrimaria, fundo: corFundo, painel: corPainel };
+    setMsg("Alterações salvas — recarregue a página (F5) para ver aplicado em 100% do sistema.");
   };
 
   return (
@@ -3180,15 +3602,10 @@ function PersonalizacaoSection({ logoBase64, onLogoAtualizado }) {
       <div style={{ marginBottom: 22 }}>
         <div style={{ fontSize: 12, color: COLORS.steelLight, marginBottom: 8 }}>Nome da empresa / responsável</div>
         <div style={{ fontSize: 11, color: COLORS.steel, marginBottom: 8, lineHeight: 1.5 }}>
-          Usado em todo o sistema onde antes aparecia "Primers" — como rótulo de responsabilidade nos status, filtros, dashboards e documentos exportados. Não tem relação com o título fixo "CONTROLE DE PROCESSOS" do menu.
+          Usado em todo o sistema onde antes aparecia "Primers" — como rótulo de responsabilidade nos status, filtros, dashboards e documentos exportados. Não tem relação com o título fixo "CONTROLE DE PROCESSOS E SERVIÇOS" do menu.
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <input value={nomeEmpresa} onChange={(e) => setNomeEmpresa(e.target.value)} placeholder="Ex: Sua Empresa, Grupo XYZ..."
-            style={{ flex: 1, background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "8px 10px", color: COLORS.ice, fontSize: 12.5 }} />
-          <button onClick={salvarNome} disabled={salvandoNome} style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "8px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase", whiteSpace: "nowrap" }}>
-            {salvandoNome ? "Salvando..." : "Salvar nome"}
-          </button>
-        </div>
+        <input value={nomeEmpresa} onChange={(e) => setNomeEmpresa(e.target.value)} placeholder="Ex: Sua Empresa, Grupo XYZ..."
+          style={{ width: "100%", background: COLORS.panelAlt, border: `1px solid ${nomeEmpresa.trim() !== originais.current.nome ? COLORS.orange + "99" : COLORS.border}`, borderRadius: 6, padding: "8px 10px", color: COLORS.ice, fontSize: 12.5 }} />
       </div>
 
       <div>
@@ -3204,9 +3621,13 @@ function PersonalizacaoSection({ logoBase64, onLogoAtualizado }) {
             <ColorSwatchPicker value={corPainel} onChange={setCorPainel} />
           </ModalField>
         </div>
-        <button onClick={salvarCores} disabled={salvandoCores} style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "8px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
-          {salvandoCores ? "Salvando..." : "Salvar cores"}
-        </button>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginTop: 20, paddingTop: 16, borderTop: `1px solid ${COLORS.border}`, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12, color: pendentes > 0 ? COLORS.orange : COLORS.steel }}>
+          {pendentes > 0 ? `${pendentes} alteração(ões) ainda não salva(s)` : "Sem alterações pendentes"}
+        </div>
+        <BotaoSalvar pendentes={pendentes} onSalvar={salvarTudo} onDescartar={descartar} salvando={salvandoNome || salvandoCores} compacto />
       </div>
 
       {msg && <div style={{ marginTop: 12, fontSize: 12, color: COLORS.steelLight }}>{msg}</div>}
@@ -3244,7 +3665,7 @@ function LoginScreen({ onLogin, logoBase64 }) {
       <div style={{ width: "100%", maxWidth: 360, background: COLORS.panel, border: `1px solid ${COLORS.borderStrong}`, borderRadius: 12, padding: 32 }}>
         <div style={{ textAlign: "center", marginBottom: 24 }}>
           {logoBase64 && <img src={logoBase64} alt="Logo" style={{ maxHeight: 100, maxWidth: 230, objectFit: "contain", marginBottom: 10 }} />}
-          <div style={{ fontFamily: "'Oswald', sans-serif", fontWeight: 700, fontSize: 18, color: COLORS.ice, letterSpacing: "0.02em", textTransform: "uppercase" }}>Controle de Processos</div>
+          <div style={{ fontFamily: "'Oswald', sans-serif", fontWeight: 700, fontSize: 18, color: COLORS.ice, letterSpacing: "0.02em", textTransform: "uppercase" }}>Controle de Processos e Serviços</div>
           <div style={{ fontSize: 10.5, color: COLORS.steel, letterSpacing: "0.06em", marginTop: 4 }}>Acesso restrito</div>
         </div>
 
@@ -3268,7 +3689,7 @@ function LoginScreen({ onLogin, logoBase64 }) {
           </button>
         </div>
         <div style={{ fontSize: 11, color: COLORS.steel, marginTop: 20, lineHeight: 1.5 }}>
-          Acesso restrito ao Controle de Processos.
+          Acesso restrito ao Controle de Processos e Serviços.
         </div>
       </div>
     </div>
@@ -3402,26 +3823,35 @@ function ConfirmarExclusaoModal({ titulo, mensagem, onCancelar, onConfirmar }) {
   );
 }
 
+/* Campo editável em modo rascunho: a alteração entra na fila de
+   "alterações não salvas" na hora (datas e listas ao escolher,
+   texto ao sair do campo) e só vai para o banco no clique em
+   "Salvar alterações". A borda laranja marca o que está pendente. */
 function CampoComConfirmacao({ tipo, valor, opcoes, onConfirmar, corTexto, largura, placeholder }) {
   const [pendente, setPendente] = useState(valor);
+  const [original] = useState(valor);
   useEffect(() => { setPendente(valor); }, [valor]);
-  const mudou = pendente !== valor;
-  const estiloBase = { background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "5px 7px", color: corTexto || COLORS.ice, fontSize: 12, width: largura };
+  const mudou = String(pendente ?? "") !== String(original ?? "");
+  const estiloBase = {
+    background: mudou ? COLORS.orangeDim : COLORS.panelAlt,
+    border: `1px solid ${mudou ? COLORS.orange + "99" : COLORS.border}`,
+    borderRadius: 6, padding: "5px 7px", color: corTexto || COLORS.ice, fontSize: 12, width: largura, outline: "none",
+  };
+  const aplicar = (v) => onConfirmar(tipo === "number" ? (parseFloat(v) || 0) : v);
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-      {tipo === "date" && <input type="date" value={pendente || ""} onChange={(e) => setPendente(e.target.value)} style={estiloBase} />}
-      {(tipo === "text" || tipo === "number") && <input type={tipo} value={pendente ?? ""} onChange={(e) => setPendente(tipo === "number" ? e.target.value : e.target.value)} placeholder={placeholder} style={estiloBase} />}
+      {tipo === "date" && <input type="date" value={pendente || ""} onChange={(e) => { setPendente(e.target.value); aplicar(e.target.value); }} style={estiloBase} />}
+      {(tipo === "text" || tipo === "number") && (
+        <input type={tipo} value={pendente ?? ""} placeholder={placeholder} style={estiloBase}
+          onChange={(e) => setPendente(e.target.value)}
+          onBlur={(e) => aplicar(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} />
+      )}
       {tipo === "select" && (
-        <select value={pendente} onChange={(e) => setPendente(e.target.value)} style={estiloBase}>
+        <select value={pendente} onChange={(e) => { setPendente(e.target.value); aplicar(e.target.value); }} style={estiloBase}>
           {opcoes.map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
-      )}
-      {mudou && (
-        <button onClick={() => onConfirmar(tipo === "number" ? (parseFloat(pendente) || 0) : pendente)} title="Confirmar alteração"
-          style={{ background: COLORS.green, border: "none", borderRadius: 5, width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
-          <CheckCircle2 size={13} color="#0a1420" />
-        </button>
       )}
     </div>
   );
@@ -3430,6 +3860,28 @@ function CampoComConfirmacao({ tipo, valor, opcoes, onConfirmar, corTexto, largu
 /* Linha "rótulo à esquerda / campo à direita" editável com botão de
    confirmação — usada na Visão Geral do processo. Componente de
    módulo de verdade (nunca declarar componentes dentro de outros!). */
+/* Campo de edição em modo rascunho: a alteração aparece destacada
+   em laranja e só vai para o banco quando o usuário clicar em
+   "Salvar alterações". */
+function CampoRascunho({ tipo, valor, opcoes, onChange, corTexto, largura, placeholder, pendente }) {
+  const estilo = {
+    background: pendente ? COLORS.orangeDim : COLORS.panelAlt,
+    border: `1px solid ${pendente ? COLORS.orange + "99" : COLORS.border}`,
+    borderRadius: 6, padding: "6px 8px", color: corTexto || COLORS.ice, fontSize: 12,
+    width: typeof largura === "number" ? largura : (largura || "100%"),
+    fontFamily: "'Inter', sans-serif", outline: "none",
+  };
+  if (tipo === "select") {
+    return (
+      <select value={valor === null || valor === undefined ? "" : valor} onChange={(e) => onChange(e.target.value)} style={estilo}>
+        {(opcoes || []).map((o) => <option key={o} value={o}>{o === "" ? "—" : o}</option>)}
+      </select>
+    );
+  }
+  return <input type={tipo === "number" ? "number" : tipo} value={valor === null || valor === undefined ? "" : valor}
+    placeholder={placeholder} onChange={(e) => onChange(e.target.value)} style={estilo} />;
+}
+
 function RowEditavel({ label, tipo, valor, onConfirmar, largura }) {
   const [pendente, setPendente] = useState(valor || "");
   useEffect(() => { setPendente(valor || ""); }, [valor]);
@@ -3472,7 +3924,7 @@ function ContratoFormModal({ title, submitLabel, initial, onClose, onSubmit, cli
           <datalist id="clientes-existentes-contrato">{clientesExistentes.map((c) => <option key={c} value={c} />)}</datalist>
         </ModalField>
         {field("Unidade", "unidade", "Ex: Loja Centro")}
-        {field("Código loja", "codigoLoja", "Ex: 12")}
+        {field("Código da unidade", "codigoLoja", "Ex: 22577")}
         <div style={{ gridColumn: "1 / -1" }}>{field("Serviço", "servico", "Ex: Aprovação de Publicidade junto a Prefeitura")}</div>
         {field("Tarefa / parcela", "tarefa", "Ex: Sinal, Protocolo, Deferimento, Entrega")}
         <ModalField label="Tipo">
@@ -3583,17 +4035,22 @@ function UnidadeContratosModal({ cliente, unidade, contratos, onClose, onBack, o
    tela de Contratos: mostra só as tarefas/parcelas daquele
    serviço específico, sem o restante do contrato.
    ============================================================ */
-function ServicoUnicoModal({ proposta, cliente, unidade, servico, contratos, processos, onUpdateContrato, onDeleteContrato, onExcluirContratos, onAddContrato, clientesExistentes, onClose, onBack }) {
+function ServicoUnicoModal({ proposta, cliente, unidade, servico, contratos, processos, onDeleteContrato, onExcluirContratos, onAddContrato, clientesExistentes, onClose, onBack, edits, onEdit, codigoUnidade }) {
   const [servicoParaTarefa, setServicoParaTarefa] = useState(false);
   const [confirmDeleteTarefa, setConfirmDeleteTarefa] = useState(null);
   const [confirmDeleteServico, setConfirmDeleteServico] = useState(false);
+  const rascunho = useRascunho();
+
+  const val = (c, campo) => (edits && edits[c.id] && campo in edits[c.id]) ? edits[c.id][campo] : c[campo];
+  const pend = (c, campo) => !!(edits && edits[c.id] && campo in edits[c.id]);
 
   const tarefas = contratos.filter((c) => c.proposta === proposta && c.cliente === cliente && c.unidade === unidade && c.servico === servico);
-  const tecnico = tarefas[0]?.tecnico || "-";
+  const pendentesAqui = tarefas.reduce((s, t) => s + ((edits && edits[t.id]) ? Object.keys(edits[t.id]).length : 0), 0);
+  const tecnico = tarefas[0] ? val(tarefas[0], "tecnico") : "-";
   const tipo = tarefas[0]?.tipo || "Processo";
   const proc = (processos || []).find((p) => p.numeroContrato === proposta && p.cliente === cliente && p.unidade === unidade && p.assunto === servico);
   const stProc = proc ? STATUS_CONFIG[proc.statusAtual] : null;
-  const concluidas = tarefas.filter((t) => t.statusParcela === "Concluído").length;
+  const concluidas = tarefas.filter((t) => val(t, "statusParcela") === "Concluído").length;
 
   const campoTarefa = { background: COLORS.bg, border: `1px solid ${COLORS.border}`, borderRadius: 5, padding: "6px 8px", fontSize: 11.5, color: COLORS.ice, width: "100%" };
   const labelTarefa = { fontSize: 9.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.03em", display: "block", marginBottom: 4 };
@@ -3602,7 +4059,7 @@ function ServicoUnicoModal({ proposta, cliente, unidade, servico, contratos, pro
     <ModalShell title={servico} onClose={onClose} onBack={onBack} maxWidth={880}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
         <div>
-          <div style={{ fontSize: 11, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em" }}>{cliente} · {unidade} · Contrato {proposta}</div>
+          <div style={{ fontSize: 11, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em" }}>{cliente} · {rotuloUnidade(unidade, codigoUnidade)} · Contrato {proposta}</div>
           <div style={{ fontSize: 12.5, color: COLORS.steelLight, marginTop: 3 }}>
             Técnico: <b style={{ color: COLORS.ice }}>{tecnico}</b> ·
             {" "}Tarefas: <Pill fg={concluidas === tarefas.length ? COLORS.green : COLORS.blue} bg={concluidas === tarefas.length ? COLORS.greenDim : COLORS.blueDim}>{concluidas}/{tarefas.length} concluída(s)</Pill>
@@ -3625,14 +4082,14 @@ function ServicoUnicoModal({ proposta, cliente, unidade, servico, contratos, pro
           <div style={{ fontSize: 11, color: COLORS.green, fontWeight: 700 }}>{tarefas.length} tarefa(s) · {concluidas} concluída(s)</div>
         </div>
         {tarefas.map((t, i) => {
-          const sp = statusParcelaStyle(t.statusParcela);
+          const sp = statusParcelaStyle(val(t, "statusParcela"));
           return (
             <div key={t.id} style={{ display: "grid", gridTemplateColumns: "0.4fr 1.6fr 1fr 1.2fr 1.4fr 0.4fr", gap: 8, alignItems: "end", marginBottom: 12 }}>
               <div><label style={labelTarefa}>Nº</label><input value={i + 1} readOnly style={{ ...campoTarefa, color: COLORS.steel }} /></div>
-              <div><label style={labelTarefa}>Descrição</label><CampoComConfirmacao tipo="text" valor={t.tarefa} onConfirmar={(v) => onUpdateContrato(t.id, { tarefa: v })} largura="100%" /></div>
-              <div><label style={labelTarefa}>Data SLA</label><CampoComConfirmacao tipo="date" valor={t.dataSLA} onConfirmar={(v) => onUpdateContrato(t.id, { dataSLA: v })} largura="100%" /></div>
-              <div><label style={labelTarefa}>Situação</label><CampoComConfirmacao tipo="select" valor={t.statusParcela} opcoes={STATUS_PARCELA_OPTIONS} onConfirmar={(v) => onUpdateContrato(t.id, { statusParcela: v })} corTexto={sp.fg} largura="100%" /></div>
-              <div><label style={labelTarefa}>Observação</label><CampoComConfirmacao tipo="text" valor={t.observacao || ""} onConfirmar={(v) => onUpdateContrato(t.id, { observacao: v })} placeholder="—" largura="100%" /></div>
+              <div><label style={labelTarefa}>Descrição</label><CampoRascunho tipo="text" valor={val(t, "tarefa")} onChange={(v) => onEdit(t.id, "tarefa", v)} pendente={pend(t, "tarefa")} /></div>
+              <div><label style={labelTarefa}>Data SLA</label><CampoRascunho tipo="date" valor={val(t, "dataSLA")} onChange={(v) => onEdit(t.id, "dataSLA", v)} pendente={pend(t, "dataSLA")} /></div>
+              <div><label style={labelTarefa}>Situação</label><CampoRascunho tipo="select" valor={val(t, "statusParcela")} opcoes={STATUS_PARCELA_OPTIONS} onChange={(v) => onEdit(t.id, "statusParcela", v)} corTexto={sp.fg} pendente={pend(t, "statusParcela")} /></div>
+              <div><label style={labelTarefa}>Observação</label><CampoRascunho tipo="text" valor={val(t, "observacao") || ""} onChange={(v) => onEdit(t.id, "observacao", v)} placeholder="—" pendente={pend(t, "observacao")} /></div>
               <button onClick={() => setConfirmDeleteTarefa(t)} title="Excluir esta tarefa"
                 style={{ background: "transparent", border: `1px solid ${COLORS.red}55`, borderRadius: 5, height: 30, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
                 <Trash2 size={11} color={COLORS.red} />
@@ -3647,7 +4104,7 @@ function ServicoUnicoModal({ proposta, cliente, unidade, servico, contratos, pro
 
       {servicoParaTarefa && (
         <ContratoFormModal title={`Adicionar tarefa — ${servico}`} submitLabel="Adicionar tarefa"
-          initial={{ proposta, cliente, unidade, tipo, servico, tecnico, tarefa: "", dataSLA: "", statusParcela: "Pendente", observacao: "" }}
+          initial={{ proposta, cliente, unidade, codigoLoja: codigoUnidade || "", tipo, servico, tecnico, tarefa: "", dataSLA: "", statusParcela: "Pendente", observacao: "" }}
           onSubmit={(fields) => onAddContrato(novaLinhaContrato(fields))} onClose={() => setServicoParaTarefa(false)} clientesExistentes={clientesExistentes} />
       )}
       {confirmDeleteTarefa && (
@@ -3660,18 +4117,30 @@ function ServicoUnicoModal({ proposta, cliente, unidade, servico, contratos, pro
           mensagem={`Excluir o serviço "${servico}" e todas as suas ${tarefas.length} tarefa(s)? Esta ação não pode ser desfeita.`}
           onConfirmar={() => { onExcluirContratos(tarefas); setConfirmDeleteServico(false); onClose(); }} />
       )}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginTop: 18, paddingTop: 14, borderTop: `1px solid ${COLORS.border}`, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12, color: pendentesAqui > 0 ? COLORS.orange : COLORS.steel }}>
+          {pendentesAqui > 0 ? `${pendentesAqui} alteração(ões) ainda não salva(s)` : "Sem alterações pendentes"}
+        </div>
+        <BotaoSalvar pendentes={pendentesAqui} onSalvar={rascunho ? rascunho.salvarTudo : undefined} onDescartar={rascunho ? rascunho.descartarTudo : undefined} salvando={rascunho ? rascunho.salvando : false} compacto />
+      </div>
     </ModalShell>
   );
 }
 
-function ContratoDetalheCompletoModal({ proposta, cliente, unidade, contratos, processos, onUpdateContrato, onDeleteContrato, onExcluirContratos, onAddContrato, clientesExistentes, onClose, onBack }) {
+function ContratoDetalheCompletoModal({ proposta, cliente, unidade, contratos, processos, onDeleteContrato, onExcluirContratos, onAddContrato, clientesExistentes, onClose, onBack, edits, onEdit, codigoUnidade }) {
   const [showAdicionarServico, setShowAdicionarServico] = useState(false);
   const [servicoParaTarefa, setServicoParaTarefa] = useState(null); // grupo de serviço, ou null
   const [expandido, setExpandido] = useState(null); // nome do serviço expandido, ou null
   const [confirmDeleteServico, setConfirmDeleteServico] = useState(null); // grupo de serviço
   const [confirmDeleteTarefa, setConfirmDeleteTarefa] = useState(null); // linha (contrato)
 
+  const rascunho = useRascunho();
+  const [ordem, ordenarPor] = useOrdenacao();
+  const val = (c, campo) => (edits && edits[c.id] && campo in edits[c.id]) ? edits[c.id][campo] : c[campo];
+  const pend = (c, campo) => !!(edits && edits[c.id] && campo in edits[c.id]);
+
   const linhas = contratos.filter((c) => c.proposta === proposta && c.cliente === cliente && c.unidade === unidade);
+  const pendentesAqui = linhas.reduce((s, t) => s + ((edits && edits[t.id]) ? Object.keys(edits[t.id]).length : 0), 0);
 
   const servicosAgrupados = useMemo(() => {
     const map = {};
@@ -3679,14 +4148,20 @@ function ContratoDetalheCompletoModal({ proposta, cliente, unidade, contratos, p
       if (!map[l.servico]) map[l.servico] = { servico: l.servico, tecnico: l.tecnico, tipo: l.tipo, tarefas: [] };
       map[l.servico].tarefas.push(l);
     });
-    return Object.values(map);
-  }, [linhas]);
+    return ordenarLista(Object.values(map), ordem, {
+      tarefas: (g) => g.tarefas.length,
+      status: (g) => {
+        const p = (processos || []).find((x) => x.numeroContrato === proposta && x.cliente === cliente && x.unidade === unidade && x.assunto === g.servico);
+        return p ? statusLabel(p.statusAtual, p.tipo) : "";
+      },
+    });
+  }, [linhas, ordem]); // eslint-disable-line
 
   const processoDoServico = (servico) => (processos || []).find((p) => p.numeroContrato === proposta && p.cliente === cliente && p.unidade === unidade && p.assunto === servico);
 
   const totalServicos = servicosAgrupados.length;
   const totalTarefas = linhas.length;
-  const tarefasConcluidas = linhas.filter((l) => l.statusParcela === "Concluído").length;
+  const tarefasConcluidas = linhas.filter((l) => val(l, "statusParcela") === "Concluído").length;
 
   const thStyle = { textAlign: "left", padding: "9px 12px", fontSize: 10, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.03em", borderBottom: `1px solid ${COLORS.border}`, background: COLORS.bg };
   const tdStyle = { padding: "11px 12px", fontSize: 12.5, color: COLORS.steelLight, borderBottom: `1px solid ${COLORS.border}` };
@@ -3697,7 +4172,7 @@ function ContratoDetalheCompletoModal({ proposta, cliente, unidade, contratos, p
     <ModalShell title={`Contrato ${proposta}`} onClose={onClose} onBack={onBack} maxWidth={960}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
         <div>
-          <div style={{ fontSize: 11, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em" }}>{cliente} · {unidade}</div>
+          <div style={{ fontSize: 11, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em" }}>{cliente} · {rotuloUnidade(unidade, codigoUnidade)}</div>
           <div style={{ fontSize: 12.5, color: COLORS.steelLight, marginTop: 3 }}>Serviços: <b style={{ color: COLORS.ice }}>{totalServicos}</b> · Tarefas: <b style={{ color: COLORS.ice }}>{totalTarefas}</b> · Concluídas: <b style={{ color: COLORS.green }}>{tarefasConcluidas}</b></div>
         </div>
         <button onClick={() => setShowAdicionarServico(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
@@ -3708,12 +4183,16 @@ function ContratoDetalheCompletoModal({ proposta, cliente, unidade, contratos, p
       <div style={{ overflowX: "auto", border: `1px solid ${COLORS.border}`, borderRadius: 8 }}>
         <table>
           <thead><tr>
-            <th style={thStyle}>Serviço</th><th style={thStyle}>Tipo</th><th style={thStyle}>Técnico</th>
-            <th style={thStyle}>Tarefas</th><th style={thStyle}>Status atual</th><th style={thStyle}>Ações</th>
+            <Th campo="servico" ordem={ordem} ordenarPor={ordenarPor} style={thStyle}>Serviço</Th>
+            <Th campo="tipo" ordem={ordem} ordenarPor={ordenarPor} style={thStyle}>Tipo</Th>
+            <Th campo="tecnico" ordem={ordem} ordenarPor={ordenarPor} style={thStyle}>Técnico</Th>
+            <Th campo="tarefas" ordem={ordem} ordenarPor={ordenarPor} style={thStyle}>Tarefas</Th>
+            <Th campo="status" ordem={ordem} ordenarPor={ordenarPor} style={thStyle}>Status atual</Th>
+            <Th style={thStyle}>Ações</Th>
           </tr></thead>
           <tbody>
             {servicosAgrupados.map((g) => {
-              const concluidasG = g.tarefas.filter((t) => t.statusParcela === "Concluído").length;
+              const concluidasG = g.tarefas.filter((t) => val(t, "statusParcela") === "Concluído").length;
               const proc = processoDoServico(g.servico);
               const stProc = proc ? STATUS_CONFIG[proc.statusAtual] : null;
               const aberto = expandido === g.servico;
@@ -3723,8 +4202,8 @@ function ContratoDetalheCompletoModal({ proposta, cliente, unidade, contratos, p
                     style={{ cursor: "pointer", background: aberto ? COLORS.redDim : "transparent" }}>
                     <td style={{ ...tdStyle, color: COLORS.ice, fontWeight: 600 }}>{g.servico}</td>
                     <td style={tdStyle} onClick={(e) => e.stopPropagation()}>
-                      <CampoComConfirmacao tipo="select" valor={g.tipo || "Processo"} opcoes={CONTRATO_TIPO_OPTIONS}
-                        onConfirmar={(novoTipo) => g.tarefas.forEach((t) => onUpdateContrato(t.id, { tipo: novoTipo }))} largura={120} />
+                      <CampoRascunho tipo="select" valor={val(g.tarefas[0], "tipo") || "Processo"} opcoes={CONTRATO_TIPO_OPTIONS}
+                        onChange={(novoTipo) => g.tarefas.forEach((t) => onEdit(t.id, "tipo", novoTipo))} largura={120} pendente={pend(g.tarefas[0], "tipo")} />
                     </td>
                     <td style={tdStyle}>{g.tecnico && g.tecnico !== "-" ? g.tecnico : "—"}</td>
                     <td style={tdStyle}>
@@ -3755,14 +4234,14 @@ function ContratoDetalheCompletoModal({ proposta, cliente, unidade, contratos, p
                             <div style={{ fontSize: 11, color: COLORS.green, fontWeight: 700 }}>{g.tarefas.length} tarefa(s) · {concluidasG} concluída(s)</div>
                           </div>
                           {g.tarefas.map((t, i) => {
-                            const sp = statusParcelaStyle(t.statusParcela);
+                            const sp = statusParcelaStyle(val(t, "statusParcela"));
                             return (
                               <div key={t.id} style={{ display: "grid", gridTemplateColumns: "0.4fr 1.6fr 1fr 1.2fr 1.4fr 0.4fr", gap: 8, alignItems: "end", marginBottom: 12 }}>
                                 <div><label style={labelTarefa}>Nº</label><input value={i + 1} readOnly style={{ ...campoTarefa, color: COLORS.steel }} /></div>
-                                <div><label style={labelTarefa}>Descrição</label><CampoComConfirmacao tipo="text" valor={t.tarefa} onConfirmar={(v) => onUpdateContrato(t.id, { tarefa: v })} largura="100%" /></div>
-                                <div><label style={labelTarefa}>Data SLA</label><CampoComConfirmacao tipo="date" valor={t.dataSLA} onConfirmar={(v) => onUpdateContrato(t.id, { dataSLA: v })} largura="100%" /></div>
-                                <div><label style={labelTarefa}>Situação</label><CampoComConfirmacao tipo="select" valor={t.statusParcela} opcoes={STATUS_PARCELA_OPTIONS} onConfirmar={(v) => onUpdateContrato(t.id, { statusParcela: v })} corTexto={sp.fg} largura="100%" /></div>
-                                <div><label style={labelTarefa}>Observação</label><CampoComConfirmacao tipo="text" valor={t.observacao || ""} onConfirmar={(v) => onUpdateContrato(t.id, { observacao: v })} placeholder="—" largura="100%" /></div>
+                                <div><label style={labelTarefa}>Descrição</label><CampoRascunho tipo="text" valor={val(t, "tarefa")} onChange={(v) => onEdit(t.id, "tarefa", v)} pendente={pend(t, "tarefa")} /></div>
+                                <div><label style={labelTarefa}>Data SLA</label><CampoRascunho tipo="date" valor={val(t, "dataSLA")} onChange={(v) => onEdit(t.id, "dataSLA", v)} pendente={pend(t, "dataSLA")} /></div>
+                                <div><label style={labelTarefa}>Situação</label><CampoRascunho tipo="select" valor={val(t, "statusParcela")} opcoes={STATUS_PARCELA_OPTIONS} onChange={(v) => onEdit(t.id, "statusParcela", v)} corTexto={sp.fg} pendente={pend(t, "statusParcela")} /></div>
+                                <div><label style={labelTarefa}>Observação</label><CampoRascunho tipo="text" valor={val(t, "observacao") || ""} onChange={(v) => onEdit(t.id, "observacao", v)} placeholder="—" pendente={pend(t, "observacao")} /></div>
                                 <button onClick={() => setConfirmDeleteTarefa(t)} title="Excluir esta tarefa"
                                   style={{ background: "transparent", border: `1px solid ${COLORS.red}55`, borderRadius: 5, height: 30, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
                                   <Trash2 size={11} color={COLORS.red} />
@@ -3784,13 +4263,21 @@ function ContratoDetalheCompletoModal({ proposta, cliente, unidade, contratos, p
           </tbody>
         </table>
       </div>
-      <div style={{ textAlign: "right", marginTop: 12, fontSize: 13, color: COLORS.steelLight }}>
-        Total do contrato: <b style={{ color: COLORS.ice, fontFamily: "'Oswald', sans-serif", fontSize: 16 }}>{totalServicos} serviço(s)</b> · <b style={{ color: COLORS.ice, fontFamily: "'Oswald', sans-serif", fontSize: 16 }}>{totalTarefas} tarefa(s)</b>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12, color: pendentesAqui > 0 ? COLORS.orange : COLORS.steel }}>
+          {pendentesAqui > 0 ? `${pendentesAqui} alteração(ões) ainda não salva(s)` : "Sem alterações pendentes"}
+        </div>
+        <div style={{ fontSize: 13, color: COLORS.steelLight }}>
+          Total do contrato: <b style={{ color: COLORS.ice, fontFamily: "'Oswald', sans-serif", fontSize: 16 }}>{totalServicos} serviço(s)</b> · <b style={{ color: COLORS.ice, fontFamily: "'Oswald', sans-serif", fontSize: 16 }}>{totalTarefas} tarefa(s)</b>
+        </div>
+      </div>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>
+        <BotaoSalvar pendentes={pendentesAqui} onSalvar={rascunho ? rascunho.salvarTudo : undefined} onDescartar={rascunho ? rascunho.descartarTudo : undefined} salvando={rascunho ? rascunho.salvando : false} compacto />
       </div>
 
       {showAdicionarServico && (
         <ContratoFormModal title={`Adicionar serviço — contrato ${proposta}`} submitLabel="Adicionar serviço"
-          initial={{ proposta, cliente, unidade, tipo: "Processo", servico: "", tarefa: "", dataSLA: "", statusParcela: "Pendente", observacao: "" }}
+          initial={{ proposta, cliente, unidade, codigoLoja: codigoUnidade || "", tipo: "Processo", servico: "", tarefa: "", dataSLA: "", statusParcela: "Pendente", observacao: "" }}
           onSubmit={(fields) => onAddContrato(novaLinhaContrato(fields))} onClose={() => setShowAdicionarServico(false)} clientesExistentes={clientesExistentes} />
       )}
       {servicoParaTarefa && (
@@ -3836,11 +4323,15 @@ function ClientesPage({ contratos, onAddContrato, isAdmin, onOpenCliente, onExcl
     return Object.values(map).map((m) => ({ cliente: m.cliente, unidades: m.unidades.size, propostas: m.propostas.size, status: m.status })).sort((a, b) => a.cliente.localeCompare(b.cliente));
   }, [contratos]);
 
-  const filtrados = useMemo(() => clientes.filter((c) => {
-    if (busca && !c.cliente.toLowerCase().includes(busca.toLowerCase())) return false;
-    if (filtroStatus.length && ![...c.status].some((s) => filtroStatus.includes(s))) return false;
-    return true;
-  }), [clientes, busca, filtroStatus]);
+  const [ordem, ordenarPor] = useOrdenacao();
+  const filtrados = useMemo(() => {
+    const base = clientes.filter((c) => {
+      if (busca && !c.cliente.toLowerCase().includes(busca.toLowerCase())) return false;
+      if (filtroStatus.length && ![...c.status].some((s) => filtroStatus.includes(s))) return false;
+      return true;
+    });
+    return ordenarLista(base, ordem, { id: (c) => idsClientes[c.cliente] });
+  }, [clientes, busca, filtroStatus, ordem, idsClientes]);
   const paginados = useMemo(() => paginate(filtrados, page, pageSize), [filtrados, page, pageSize]);
   const [showNovo, setShowNovo] = useState(false);
 
@@ -3873,9 +4364,14 @@ function ClientesPage({ contratos, onAddContrato, isAdmin, onOpenCliente, onExcl
       <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, overflow: "hidden" }}>
         <div style={{ overflowX: "auto" }}>
           <table>
-            <thead><tr>{[isAdmin ? <input key="all" type="checkbox" checked={todosPaginaSelecionados} onChange={toggleTodosPagina} /> : "", "ID", "Cliente", "Unidades", "Contratos", ""].map((h, i) => (
-              <th key={i} style={{ textAlign: "left", padding: "10px 16px", fontSize: 10.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", borderBottom: `1px solid ${COLORS.border}` }}>{h}</th>
-            ))}</tr></thead>
+            <thead><tr>
+              {isAdmin && <Th ordem={ordem} ordenarPor={ordenarPor}><input type="checkbox" checked={todosPaginaSelecionados} onChange={toggleTodosPagina} /></Th>}
+              <Th campo="id" ordem={ordem} ordenarPor={ordenarPor}>ID</Th>
+              <Th campo="cliente" ordem={ordem} ordenarPor={ordenarPor}>Cliente</Th>
+              <Th campo="unidades" ordem={ordem} ordenarPor={ordenarPor}>Unidades</Th>
+              <Th campo="propostas" ordem={ordem} ordenarPor={ordenarPor}>Contratos</Th>
+              <Th ordem={ordem} ordenarPor={ordenarPor}>{""}</Th>
+            </tr></thead>
             <tbody>
               {paginados.map((c) => (
                 <tr key={c.cliente} className="row-hover" style={{ borderBottom: `1px solid ${COLORS.border}`, cursor: "pointer" }} onClick={() => onOpenCliente(c.cliente)}>
@@ -3921,19 +4417,24 @@ function UnidadesPage({ contratos, onAddContrato, onOpenUnidade, isAdmin, onExcl
     const map = {};
     contratos.forEach((c) => {
       const key = `${c.cliente}|${c.unidade}`;
-      if (!map[key]) map[key] = { cliente: c.cliente, unidade: c.unidade, servicos: new Set(), statusContrato: c.statusContrato };
+      if (!map[key]) map[key] = { cliente: c.cliente, unidade: c.unidade, codigoUnidade: "", servicos: new Set(), statusContrato: c.statusContrato };
       const m = map[key];
       m.servicos.add(c.servico);
+      if (!m.codigoUnidade && c.codigoLoja && c.codigoLoja !== "-") m.codigoUnidade = c.codigoLoja;
       m.statusContrato = c.statusContrato || m.statusContrato;
     });
-    return Object.values(map).map((m) => ({ cliente: m.cliente, unidade: m.unidade, servicos: m.servicos.size, statusContrato: m.statusContrato })).sort((a, b) => a.cliente.localeCompare(b.cliente) || a.unidade.localeCompare(b.unidade));
+    return Object.values(map).map((m) => ({ cliente: m.cliente, unidade: m.unidade, codigoUnidade: m.codigoUnidade, servicos: m.servicos.size, statusContrato: m.statusContrato })).sort((a, b) => a.cliente.localeCompare(b.cliente) || a.unidade.localeCompare(b.unidade));
   }, [contratos]);
 
-  const filtrados = useMemo(() => unidades.filter((u) => {
-    if (busca && !`${u.cliente} ${u.unidade}`.toLowerCase().includes(busca.toLowerCase())) return false;
-    if (filtroStatus.length && !filtroStatus.includes(u.statusContrato)) return false;
-    return true;
-  }), [unidades, busca, filtroStatus]);
+  const [ordem, ordenarPor] = useOrdenacao();
+  const filtrados = useMemo(() => {
+    const base = unidades.filter((u) => {
+      if (busca && !`${u.cliente} ${u.unidade} ${u.codigoUnidade}`.toLowerCase().includes(busca.toLowerCase())) return false;
+      if (filtroStatus.length && !filtroStatus.includes(u.statusContrato)) return false;
+      return true;
+    });
+    return ordenarLista(base, ordem, { id: (u) => idsUnidades[`${u.cliente}|${u.unidade}`] });
+  }, [unidades, busca, filtroStatus, ordem, idsUnidades]);
   const paginados = useMemo(() => paginate(filtrados, page, pageSize), [filtrados, page, pageSize]);
   const clientesExistentes = useMemo(() => Array.from(new Set(contratos.map((c) => c.cliente))).sort(), [contratos]);
   const [showNovo, setShowNovo] = useState(false);
@@ -3953,7 +4454,7 @@ function UnidadesPage({ contratos, onAddContrato, onOpenUnidade, isAdmin, onExcl
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "8px 12px", width: 280 }}>
             <Search size={14} color={COLORS.steel} />
-            <input value={busca} onChange={(e) => { setBusca(e.target.value); setPage(1); }} placeholder="Buscar cliente ou unidade..."
+            <input value={busca} onChange={(e) => { setBusca(e.target.value); setPage(1); }} placeholder="Buscar cliente, unidade ou código..."
               style={{ background: "transparent", border: "none", outline: "none", color: COLORS.ice, fontSize: 13, width: "100%" }} />
           </div>
           <BotaoFiltroPopup grupos={[{ label: "Status do contrato", options: statusOpcoes, selected: filtroStatus, onApply: (v) => { setFiltroStatus(v); setPage(1); } }]} />
@@ -3966,9 +4467,16 @@ function UnidadesPage({ contratos, onAddContrato, onOpenUnidade, isAdmin, onExcl
       <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, overflow: "hidden" }}>
         <div style={{ overflowX: "auto" }}>
           <table>
-            <thead><tr>{[isAdmin ? <input key="all" type="checkbox" checked={todosPaginaSelecionados} onChange={toggleTodosPagina} /> : "", "ID", "Cliente", "Unidade", "Serviços", "Status do contrato", ""].map((h, i) => (
-              <th key={i} style={{ textAlign: "left", padding: "10px 16px", fontSize: 10.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", borderBottom: `1px solid ${COLORS.border}` }}>{h}</th>
-            ))}</tr></thead>
+            <thead><tr>
+              {isAdmin && <Th ordem={ordem} ordenarPor={ordenarPor}><input type="checkbox" checked={todosPaginaSelecionados} onChange={toggleTodosPagina} /></Th>}
+              <Th campo="id" ordem={ordem} ordenarPor={ordenarPor}>ID</Th>
+              <Th campo="cliente" ordem={ordem} ordenarPor={ordenarPor}>Cliente</Th>
+              <Th campo="codigoUnidade" ordem={ordem} ordenarPor={ordenarPor}>Código da unidade</Th>
+              <Th campo="unidade" ordem={ordem} ordenarPor={ordenarPor}>Unidade</Th>
+              <Th campo="servicos" ordem={ordem} ordenarPor={ordenarPor}>Serviços</Th>
+              <Th campo="statusContrato" ordem={ordem} ordenarPor={ordenarPor}>Status do contrato</Th>
+              <Th ordem={ordem} ordenarPor={ordenarPor}>{""}</Th>
+            </tr></thead>
             <tbody>
               {paginados.map((u, i) => {
                 const sc = statusContratoStyle(u.statusContrato);
@@ -3977,6 +4485,7 @@ function UnidadesPage({ contratos, onAddContrato, onOpenUnidade, isAdmin, onExcl
                     {isAdmin && <td style={{ padding: "11px 16px" }} onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selecionados.has(chave(u))} onChange={() => toggleSel(chave(u))} /></td>}
                     <td style={{ padding: "11px 16px", fontSize: 11, color: COLORS.steel, fontFamily: "monospace" }}>{idsUnidades[`${u.cliente}|${u.unidade}`]}</td>
                     <td style={{ padding: "11px 16px", fontSize: 13, fontWeight: 600, color: COLORS.ice }}>{u.cliente}</td>
+                    <td style={{ padding: "11px 16px", fontSize: 12.5, color: COLORS.steel, fontFamily: "monospace" }}>{u.codigoUnidade || "—"}</td>
                     <td style={{ padding: "11px 16px", fontSize: 13, color: COLORS.steelLight }}>{u.unidade}</td>
                     <td style={{ padding: "11px 16px", fontSize: 13, color: COLORS.steelLight }}>{u.servicos}</td>
                     <td style={{ padding: "11px 16px" }}><Pill fg={sc.fg} bg={sc.bg}>{u.statusContrato}</Pill></td>
@@ -3984,7 +4493,7 @@ function UnidadesPage({ contratos, onAddContrato, onOpenUnidade, isAdmin, onExcl
                   </tr>
                 );
               })}
-              {filtrados.length === 0 && <tr><td colSpan={7} style={{ padding: 40, textAlign: "center", color: COLORS.steel, fontSize: 13 }}>Nenhuma unidade encontrada.</td></tr>}
+              {filtrados.length === 0 && <tr><td colSpan={8} style={{ padding: 40, textAlign: "center", color: COLORS.steel, fontSize: 13 }}>Nenhuma unidade encontrada.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -4028,9 +4537,12 @@ function PlanejamentoServicosPage({ contratos, onOpenContrato }) {
 
   const clientes = useMemo(() => Array.from(new Set(contratos.map((c) => c.cliente))).sort(), [contratos]);
   const unidades = useMemo(() => {
-    const base = filtroCliente.length ? contratos.filter((c) => filtroCliente.includes(c.cliente)) : contratos;
+    if (!filtroCliente.length) return [];
+    const base = contratos.filter((c) => filtroCliente.includes(c.cliente));
     return Array.from(new Set(base.map((c) => c.unidade))).sort();
   }, [contratos, filtroCliente]);
+  const codigosUnidade = useMemo(() => mapaCodigosUnidade(contratos), [contratos]);
+  const rotuloUn = (u) => rotuloUnidade(u, codigosUnidade[`${filtroCliente[0]}|${u}`]);
   const contratosOpts = useMemo(() => Array.from(new Set(contratos.map((c) => c.proposta))).sort(), [contratos]);
   const servicos = useMemo(() => Array.from(new Set(contratos.map((c) => c.servico))).sort(), [contratos]);
 
@@ -4077,7 +4589,11 @@ function PlanejamentoServicosPage({ contratos, onOpenContrato }) {
   ].filter((d) => d.value > 0);
   const PIE_COLORS = { "Concluído": COLORS.green, "Não concluído": COLORS.orange };
 
-  const ordenadosMes = useMemo(() => [...doMes].sort((a, b) => (a.dataSLA || "").localeCompare(b.dataSLA || "")), [doMes]);
+  const [ordemMes, ordenarMesPor] = useOrdenacao();
+  const ordenadosMes = useMemo(() => {
+    const base = [...doMes].sort((a, b) => (a.dataSLA || "").localeCompare(b.dataSLA || ""));
+    return ordenarLista(base, ordemMes, { codigoUnidade: (c) => c.codigoLoja });
+  }, [doMes, ordemMes]);
   const paginadosMes = useMemo(() => paginate(ordenadosMes, page, pageSize), [ordenadosMes, page, pageSize]);
 
   return (
@@ -4085,7 +4601,8 @@ function PlanejamentoServicosPage({ contratos, onOpenContrato }) {
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 20 }}>
         <BotaoFiltroPopup grupos={[
           { label: "Clientes", options: clientes, selected: filtroCliente, onApply: (v) => { setFiltroCliente(v); setFiltroUnidade([]); setPage(1); } },
-          { label: "Unidades", options: unidades, selected: filtroUnidade, onApply: (v) => { setFiltroUnidade(v); setPage(1); } },
+          { label: "Unidades do cliente", options: unidades, selected: filtroUnidade, onApply: (v) => { setFiltroUnidade(v); setPage(1); }, labelFor: rotuloUn,
+            habilitado: filtroCliente.length > 0, mensagemBloqueio: "Escolha um cliente para carregar as unidades." },
           { label: "Contratos", options: contratosOpts, selected: filtroContrato, onApply: (v) => { setFiltroContrato(v); setPage(1); } },
           { label: "Serviços", options: servicos, selected: filtroServico, onApply: (v) => { setFiltroServico(v); setPage(1); } },
         ]} />
@@ -4152,25 +4669,29 @@ function PlanejamentoServicosPage({ contratos, onOpenContrato }) {
           <div style={{ background: COLORS.panelAlt, borderRadius: 8, overflow: "hidden" }}>
             <div style={{ overflowX: "auto" }}>
               <table>
-                <thead><tr>{["Cliente / Unidade", "Serviço", "Tarefa", "Situação"].map((h) => (
-                  <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontSize: 10, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.03em", borderBottom: `1px solid ${COLORS.border}`, whiteSpace: "nowrap" }}>{h}</th>
-                ))}</tr></thead>
+                <thead><tr>
+                  <Th campo="cliente" ordem={ordemMes} ordenarPor={ordenarMesPor} style={{ padding: "8px 12px", fontSize: 10 }}>Cliente</Th>
+                  <Th campo="codigoUnidade" ordem={ordemMes} ordenarPor={ordenarMesPor} style={{ padding: "8px 12px", fontSize: 10 }}>Cód.</Th>
+                  <Th campo="unidade" ordem={ordemMes} ordenarPor={ordenarMesPor} style={{ padding: "8px 12px", fontSize: 10 }}>Unidade</Th>
+                  <Th campo="servico" ordem={ordemMes} ordenarPor={ordenarMesPor} style={{ padding: "8px 12px", fontSize: 10 }}>Serviço</Th>
+                  <Th campo="tarefa" ordem={ordemMes} ordenarPor={ordenarMesPor} style={{ padding: "8px 12px", fontSize: 10 }}>Tarefa</Th>
+                  <Th campo="statusParcela" ordem={ordemMes} ordenarPor={ordenarMesPor} style={{ padding: "8px 12px", fontSize: 10 }}>Situação</Th>
+                </tr></thead>
                 <tbody>
                   {paginadosMes.map((c) => {
                     const sp = statusParcelaStyle(c.statusParcela);
                     return (
                       <tr key={c.id} className="row-hover" style={{ cursor: onOpenContrato ? "pointer" : "default", borderBottom: `1px solid ${COLORS.border}` }} onClick={() => onOpenContrato && onOpenContrato(c.cliente, c.unidade, c.proposta)}>
-                        <td style={{ padding: "8px 12px" }}>
-                          <div style={{ fontSize: 12, fontWeight: 600, color: COLORS.ice }}>{c.cliente}</div>
-                          <div style={{ fontSize: 10.5, color: COLORS.steel }}>{c.unidade}</div>
-                        </td>
+                        <td style={{ padding: "8px 12px", fontSize: 12, fontWeight: 600, color: COLORS.ice }}>{c.cliente}</td>
+                        <td style={{ padding: "8px 12px", fontSize: 11, color: COLORS.steel, fontFamily: "monospace" }}>{c.codigoLoja && c.codigoLoja !== "-" ? c.codigoLoja : "—"}</td>
+                        <td style={{ padding: "8px 12px", fontSize: 11.5, color: COLORS.steelLight }}>{c.unidade}</td>
                         <td style={{ padding: "8px 12px", fontSize: 11.5, color: COLORS.steelLight, maxWidth: 160 }}>{c.servico}</td>
                         <td style={{ padding: "8px 12px", fontSize: 11.5, color: COLORS.steel, maxWidth: 120 }}>{c.tarefa}</td>
                         <td style={{ padding: "8px 12px" }}><Pill fg={sp.fg} bg={sp.bg}>{c.statusParcela}</Pill></td>
                       </tr>
                     );
                   })}
-                  {doMes.length === 0 && <tr><td colSpan={4} style={{ padding: 24, textAlign: "center", color: COLORS.steel, fontSize: 12.5 }}>Nenhum serviço neste mês.</td></tr>}
+                  {doMes.length === 0 && <tr><td colSpan={6} style={{ padding: 24, textAlign: "center", color: COLORS.steel, fontSize: 12.5 }}>Nenhum serviço neste mês.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -4189,7 +4710,7 @@ function PlanejamentoServicosPage({ contratos, onOpenContrato }) {
    mesmo conteúdo, sem nenhuma coluna de valor — o que se mede
    aqui é quantidade de serviços, de tarefas e a situação delas.
    ============================================================ */
-function ServicosContratadosPage({ contratos, processos, onUpdateContrato, onAddContrato, onExcluirContratos, isAdmin, onOpenContrato, onOpenServico }) {
+function ServicosContratadosPage({ contratos, processos, onAddContrato, onExcluirContratos, isAdmin, onOpenContrato, onOpenServico, edits, onEdit }) {
   const [filtroCliente, setFiltroCliente] = useState([]);
   const [filtroUnidade, setFiltroUnidade] = useState([]);
   const [filtroStatusContrato, setFiltroStatusContrato] = useState([]);
@@ -4203,33 +4724,50 @@ function ServicosContratadosPage({ contratos, processos, onUpdateContrato, onAdd
 
   const clientes = useMemo(() => Array.from(new Set(contratos.map((c) => c.cliente))).sort(), [contratos]);
   const unidades = useMemo(() => {
-    const base = filtroCliente.length ? contratos.filter((c) => filtroCliente.includes(c.cliente)) : contratos;
+    if (!filtroCliente.length) return [];
+    const base = contratos.filter((c) => filtroCliente.includes(c.cliente));
     return Array.from(new Set(base.map((c) => c.unidade))).sort();
   }, [contratos, filtroCliente]);
+  const codigosUnidade = useMemo(() => mapaCodigosUnidade(contratos), [contratos]);
+  const rotuloUn = (u) => rotuloUnidade(u, codigosUnidade[`${filtroCliente[0]}|${u}`]);
   const statusContratoOpts = useMemo(() => Array.from(new Set(contratos.map((c) => c.statusContrato))).filter(Boolean).sort(), [contratos]);
 
-  const filtrados = useMemo(() => contratos.filter((c) => {
-    if (filtroCliente.length && !filtroCliente.includes(c.cliente)) return false;
-    if (filtroUnidade.length && !filtroUnidade.includes(c.unidade)) return false;
-    if (filtroStatusContrato.length && !filtroStatusContrato.includes(c.statusContrato)) return false;
-    if (filtroStatusParcela.length && !filtroStatusParcela.includes(c.statusParcela)) return false;
-    if (busca) {
-      const q = busca.toLowerCase();
-      const hay = `${c.cliente} ${c.unidade} ${c.servico} ${c.proposta}`.toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
-    return true;
-  }), [contratos, filtroCliente, filtroUnidade, filtroStatusContrato, filtroStatusParcela, busca]);
+  const [ordem, ordenarPor] = useOrdenacao();
+  const val = (c, campo) => (edits && edits[c.id] && campo in edits[c.id]) ? edits[c.id][campo] : c[campo];
+  const pend = (c, campo) => !!(edits && edits[c.id] && campo in edits[c.id]);
+
+  const filtrados = useMemo(() => {
+    const base = contratos.filter((c) => {
+      if (filtroCliente.length && !filtroCliente.includes(c.cliente)) return false;
+      if (filtroUnidade.length && !filtroUnidade.includes(c.unidade)) return false;
+      if (filtroStatusContrato.length && !filtroStatusContrato.includes(c.statusContrato)) return false;
+      if (filtroStatusParcela.length && !filtroStatusParcela.includes(val(c, "statusParcela"))) return false;
+      if (busca) {
+        const q = busca.toLowerCase();
+        const hay = `${c.cliente} ${c.unidade} ${c.codigoLoja} ${c.servico} ${c.proposta}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    return ordenarLista(base, ordem, {
+      codigoUnidade: (c) => c.codigoLoja,
+      tecnico: (c) => val(c, "tecnico"),
+      dataSLA: (c) => val(c, "dataSLA"),
+      statusParcela: (c) => val(c, "statusParcela"),
+      inicio: (c) => { const p = (processos || []).find((x) => x.numeroContrato === c.proposta && x.cliente === c.cliente && x.unidade === c.unidade && x.assunto === c.servico); return p ? p.dataInicio : null; },
+      conclusao: (c) => { const p = (processos || []).find((x) => x.numeroContrato === c.proposta && x.cliente === c.cliente && x.unidade === c.unidade && x.assunto === c.servico); return p ? p.dataConclusao : null; },
+    });
+  }, [contratos, filtroCliente, filtroUnidade, filtroStatusContrato, filtroStatusParcela, busca, ordem, edits, processos]); // eslint-disable-line
 
   const totalPropostas = useMemo(() => new Set(filtrados.map((c) => c.proposta)).size, [filtrados]);
   const totalClientes = useMemo(() => new Set(filtrados.map((c) => c.cliente)).size, [filtrados]);
   const totalServicos = useMemo(() => new Set(filtrados.map((c) => `${c.proposta}|${c.cliente}|${c.unidade}|${c.servico}`)).size, [filtrados]);
   const paginados = useMemo(() => paginate(filtrados, page, pageSize), [filtrados, page, pageSize]);
 
-  const qtdConcluidas = filtrados.filter((c) => c.statusParcela === "Concluído").length;
-  const qtdEmAndamento = filtrados.filter((c) => c.statusParcela === "Em andamento").length;
-  const qtdPendentes = filtrados.filter((c) => c.statusParcela === "Pendente").length;
-  const qtdSuspensas = filtrados.filter((c) => c.statusParcela === "Suspenso").length;
+  const qtdConcluidas = filtrados.filter((c) => val(c, "statusParcela") === "Concluído").length;
+  const qtdEmAndamento = filtrados.filter((c) => val(c, "statusParcela") === "Em andamento").length;
+  const qtdPendentes = filtrados.filter((c) => val(c, "statusParcela") === "Pendente").length;
+  const qtdSuspensas = filtrados.filter((c) => val(c, "statusParcela") === "Suspenso").length;
   const pctConcluido = filtrados.length === 0 ? 0 : Math.round((qtdConcluidas / filtrados.length) * 100);
   const pieSituacao = [
     { name: "Concluído", value: qtdConcluidas },
@@ -4242,7 +4780,8 @@ function ServicosContratadosPage({ contratos, processos, onUpdateContrato, onAdd
     const map = {};
     filtrados.forEach((c) => {
       if (!map[c.servico]) map[c.servico] = { servico: c.servico, "Concluído": 0, "Em andamento": 0, "Pendente": 0, "Suspenso": 0 };
-      map[c.servico][c.statusParcela] = (map[c.servico][c.statusParcela] || 0) + 1;
+      const st = val(c, "statusParcela");
+      map[c.servico][st] = (map[c.servico][st] || 0) + 1;
     });
     return Object.values(map)
       .sort((a, b) => (b["Concluído"] + b["Em andamento"] + b["Pendente"] + b["Suspenso"]) - (a["Concluído"] + a["Em andamento"] + a["Pendente"] + a["Suspenso"]))
@@ -4250,8 +4789,8 @@ function ServicosContratadosPage({ contratos, processos, onUpdateContrato, onAdd
   }, [filtrados]);
 
   const exportar = () => {
-    const rows = [["Proposta", "Cliente", "Unidade", "Serviço", "Tarefa", "Tipo", "Técnico", "Coordenador", "Data SLA", "Status Serviço", "Situação da tarefa", "Observação"]];
-    filtrados.forEach((c) => rows.push([c.proposta, c.cliente, c.unidade, c.servico, c.tarefa, c.tipo, c.tecnico, c.coordenador, fmtDate(c.dataSLA), c.statusServico, c.statusParcela, c.observacao]));
+    const rows = [["Proposta", "Cliente", "Código da unidade", "Unidade", "Serviço", "Tarefa", "Tipo", "Técnico", "Coordenador", "Data SLA", "Status Serviço", "Situação da tarefa", "Observação"]];
+    filtrados.forEach((c) => rows.push([c.proposta, c.cliente, c.codigoLoja, c.unidade, c.servico, c.tarefa, c.tipo, val(c, "tecnico"), c.coordenador, fmtDate(val(c, "dataSLA")), c.statusServico, val(c, "statusParcela"), c.observacao]));
     downloadCSV("servicos_contratados.csv", rows);
   };
 
@@ -4325,7 +4864,8 @@ function ServicosContratadosPage({ contratos, processos, onUpdateContrato, onAdd
           </div>
           <BotaoFiltroPopup grupos={[
             { label: "Clientes", options: clientes, selected: filtroCliente, onApply: (v) => { setFiltroCliente(v); setFiltroUnidade([]); setPage(1); } },
-            { label: "Unidades", options: unidades, selected: filtroUnidade, onApply: (v) => { setFiltroUnidade(v); setPage(1); } },
+            { label: "Unidades do cliente", options: unidades, selected: filtroUnidade, onApply: (v) => { setFiltroUnidade(v); setPage(1); }, labelFor: rotuloUn,
+              habilitado: filtroCliente.length > 0, mensagemBloqueio: "Escolha um cliente para carregar as unidades." },
             { label: "Status do contrato", options: statusContratoOpts, selected: filtroStatusContrato, onApply: (v) => { setFiltroStatusContrato(v); setPage(1); } },
             { label: "Situação da tarefa", options: STATUS_PARCELA_OPTIONS, selected: filtroStatusParcela, onApply: (v) => { setFiltroStatusParcela(v); setPage(1); } },
           ]} />
@@ -4345,32 +4885,46 @@ function ServicosContratadosPage({ contratos, processos, onUpdateContrato, onAdd
       <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, overflow: "hidden" }}>
         <div style={{ overflowX: "auto" }}>
           <table>
-            <thead><tr>{[isAdmin ? <input key="all" type="checkbox" checked={todosPaginaSelecionados} onChange={toggleTodosPagina} /> : "", "Proposta", "Cliente / Unidade", "Serviço", "Tarefa", "Tipo", "Técnico", "Data SLA", "Situação da tarefa", "Início", "Conclusão", "Ações"].map((h, i) => (
-              <th key={i} style={{ textAlign: "left", padding: "10px 16px", fontSize: 10.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", borderBottom: `1px solid ${COLORS.border}`, whiteSpace: "nowrap" }}>{h}</th>
-            ))}</tr></thead>
+            <thead><tr>
+              {isAdmin && <Th ordem={ordem} ordenarPor={ordenarPor}><input type="checkbox" checked={todosPaginaSelecionados} onChange={toggleTodosPagina} /></Th>}
+              <Th campo="proposta" ordem={ordem} ordenarPor={ordenarPor}>Proposta</Th>
+              <Th campo="cliente" ordem={ordem} ordenarPor={ordenarPor}>Cliente</Th>
+              <Th campo="codigoUnidade" ordem={ordem} ordenarPor={ordenarPor}>Código da unidade</Th>
+              <Th campo="unidade" ordem={ordem} ordenarPor={ordenarPor}>Unidade</Th>
+              <Th campo="servico" ordem={ordem} ordenarPor={ordenarPor}>Serviço</Th>
+              <Th campo="tarefa" ordem={ordem} ordenarPor={ordenarPor}>Tarefa</Th>
+              <Th campo="tipo" ordem={ordem} ordenarPor={ordenarPor}>Tipo</Th>
+              <Th campo="tecnico" ordem={ordem} ordenarPor={ordenarPor}>Técnico</Th>
+              <Th campo="dataSLA" ordem={ordem} ordenarPor={ordenarPor}>Data SLA</Th>
+              <Th campo="statusParcela" ordem={ordem} ordenarPor={ordenarPor}>Situação da tarefa</Th>
+              <Th campo="inicio" ordem={ordem} ordenarPor={ordenarPor}>Início</Th>
+              <Th campo="conclusao" ordem={ordem} ordenarPor={ordenarPor}>Conclusão</Th>
+              <Th ordem={ordem} ordenarPor={ordenarPor}>Ações</Th>
+            </tr></thead>
             <tbody>
               {paginados.map((c) => {
-                const sp = statusParcelaStyle(c.statusParcela);
+                const sp = statusParcelaStyle(val(c, "statusParcela"));
                 const proc = processoDoServico(c);
                 return (
                   <tr key={c.id} style={{ borderBottom: `1px solid ${COLORS.border}` }}>
                     {isAdmin && <td style={{ padding: "10px 16px" }}><input type="checkbox" checked={selecionados.has(c.id)} onChange={() => toggleSel(c.id)} /></td>}
                     <td style={{ padding: "10px 16px", fontSize: 12, color: COLORS.steel, fontFamily: "monospace" }}>{c.proposta}</td>
-                    <td style={{ padding: "10px 16px" }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.ice }}>{c.cliente}</div>
-                      <div style={{ fontSize: 11.5, color: COLORS.steel, marginTop: 2 }}>{c.unidade}</div>
-                    </td>
+                    <td style={{ padding: "10px 16px", fontSize: 13, fontWeight: 600, color: COLORS.ice }}>{c.cliente}</td>
+                    <td style={{ padding: "10px 16px", fontSize: 12, color: COLORS.steel, fontFamily: "monospace" }}>{c.codigoLoja && c.codigoLoja !== "-" ? c.codigoLoja : "—"}</td>
+                    <td style={{ padding: "10px 16px", fontSize: 12.5, color: COLORS.steelLight }}>{c.unidade}</td>
                     <td style={{ padding: "10px 16px", fontSize: 12.5, color: COLORS.steelLight, maxWidth: 220 }}>{c.servico}</td>
                     <td style={{ padding: "10px 16px", fontSize: 12, color: COLORS.steel }}>{c.tarefa}</td>
                     <td style={{ padding: "10px 16px", fontSize: 11.5, color: COLORS.steel, whiteSpace: "nowrap" }}>{c.tipo || "Processo"}</td>
                     <td style={{ padding: "10px 16px" }}>
-                      <CampoComConfirmacao tipo="select" valor={TECNICOS_OPTIONS.includes(c.tecnico) ? c.tecnico : ""} opcoes={["", ...TECNICOS_OPTIONS]} onConfirmar={(v) => onUpdateContrato(c.id, { tecnico: v })} largura={110} />
+                      <CampoRascunho tipo="select" valor={TECNICOS_OPTIONS.includes(val(c, "tecnico")) ? val(c, "tecnico") : ""} opcoes={["", ...TECNICOS_OPTIONS]}
+                        onChange={(v) => onEdit(c.id, "tecnico", v)} largura={110} pendente={pend(c, "tecnico")} />
                     </td>
                     <td style={{ padding: "10px 16px" }}>
-                      <CampoComConfirmacao tipo="date" valor={c.dataSLA} onConfirmar={(v) => onUpdateContrato(c.id, { dataSLA: v })} largura={130} />
+                      <CampoRascunho tipo="date" valor={val(c, "dataSLA")} onChange={(v) => onEdit(c.id, "dataSLA", v)} largura={130} pendente={pend(c, "dataSLA")} />
                     </td>
                     <td style={{ padding: "10px 16px" }}>
-                      <CampoComConfirmacao tipo="select" valor={c.statusParcela} opcoes={STATUS_PARCELA_OPTIONS} onConfirmar={(v) => onUpdateContrato(c.id, { statusParcela: v })} corTexto={sp.fg} largura={150} />
+                      <CampoRascunho tipo="select" valor={val(c, "statusParcela")} opcoes={STATUS_PARCELA_OPTIONS}
+                        onChange={(v) => onEdit(c.id, "statusParcela", v)} corTexto={sp.fg} largura={150} pendente={pend(c, "statusParcela")} />
                     </td>
                     <td style={{ padding: "10px 16px", fontSize: 12, color: COLORS.steel, whiteSpace: "nowrap" }}>{proc ? fmtDate(proc.dataInicio) : "—"}</td>
                     <td style={{ padding: "10px 16px", fontSize: 12, color: COLORS.steel, whiteSpace: "nowrap" }}>{proc ? fmtDate(proc.dataConclusao) : "—"}</td>
@@ -4384,7 +4938,7 @@ function ServicosContratadosPage({ contratos, processos, onUpdateContrato, onAdd
                 );
               })}
               {filtrados.length === 0 && (
-                <tr><td colSpan={12} style={{ padding: 40, textAlign: "center", color: COLORS.steel, fontSize: 13 }}>
+                <tr><td colSpan={14} style={{ padding: 40, textAlign: "center", color: COLORS.steel, fontSize: 13 }}>
                   Nenhum serviço cadastrado ainda. Use "Importar novos clientes/serviços" no menu Clientes.
                 </td></tr>
               )}
@@ -4432,6 +4986,46 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
   const [agendaItens, setAgendaItens] = useState([]);
   const [eventos, setEventos] = useState([]);
   const [carregandoDados, setCarregandoDados] = useState(true);
+
+  /* ---------- RASCUNHO: nada vai para o banco sem "Salvar alterações" ---------- */
+  const rascunho = useRascunhoGlobal();
+  const [rascunhoProcessos, setRascunhoProcessos] = useState({});   // id -> processo modificado
+  const [rascunhoContratos, setRascunhoContratos] = useState({});   // id -> { campo: valor }
+  const [rascunhoEventos, setRascunhoEventos] = useState({});       // id -> { campo: valor }
+
+  const codigosUnidade = useMemo(() => mapaCodigosUnidade(contratos), [contratos]);
+  useEffect(() => { CODIGOS_UNIDADE = codigosUnidade; }, [codigosUnidade]);
+  const codigoDaUnidade = (cliente, unidade) => codigosUnidade[`${cliente}|${unidade}`] || "";
+
+  /* Conta quantos campos de topo mudaram entre o registro original e o rascunho. */
+  const contarDiferencas = (orig, novo) => {
+    if (!orig) return 1;
+    let n = 0;
+    Object.keys(novo).forEach((k) => {
+      const a = orig[k], b = novo[k];
+      const iguais = (typeof a === "object" || typeof b === "object") ? JSON.stringify(a) === JSON.stringify(b) : a === b;
+      if (!iguais) n++;
+    });
+    return n;
+  };
+  const pendentesDoProcesso = (id) => {
+    const novo = rascunhoProcessos[id];
+    if (!novo) return 0;
+    return contarDiferencas(processos.find((p) => p.id === id), novo);
+  };
+  const editarProcessoRascunho = (novo) => setRascunhoProcessos((m) => ({ ...m, [novo.id]: novo }));
+  const descartarProcessoRascunho = (id) => setRascunhoProcessos((m) => { const n = { ...m }; delete n[id]; return n; });
+  const editarContratoRascunho = (id, campo, valor) => setRascunhoContratos((m) => {
+    const orig = contratos.find((c) => c.id === id) || {};
+    const atual = { ...(m[id] || {}) };
+    if (String(orig[campo] ?? "") === String(valor ?? "")) delete atual[campo]; else atual[campo] = valor;
+    const n = { ...m };
+    if (Object.keys(atual).length) n[id] = atual; else delete n[id];
+    return n;
+  });
+  const editarEventoRascunho = (id, campo, valor) => setRascunhoEventos((m) => ({ ...m, [id]: { ...(m[id] || {}), [campo]: valor } }));
+
+  useEffect(() => { setRascunhoProcessos({}); setRascunhoContratos({}); setRascunhoEventos({}); }, [rascunho.sinalDescarte]);
 
   // Carrega tudo do banco de dados assim que a tela abre
   useEffect(() => {
@@ -4585,9 +5179,43 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
       });
     }
   };
-  const concluirProcesso = (novo) => {
-    updateProcesso(novo);
-    setSelected(novo);
+  /* Registra no rascunho global quantas alterações estão pendentes em
+     cada área e como aplicá-las no banco quando o usuário salvar. */
+  useEffect(() => {
+    const total = Object.keys(rascunhoProcessos).reduce((s, id) => s + pendentesDoProcesso(id), 0);
+    rascunho.registrar("processos", total, async () => {
+      for (const p of Object.values(rascunhoProcessos)) await gravarProcessoComAgenda(p);
+      setRascunhoProcessos({});
+    });
+  }, [rascunhoProcessos, processos]); // eslint-disable-line
+  useEffect(() => {
+    const total = Object.values(rascunhoContratos).reduce((s, f) => s + Object.keys(f).length, 0);
+    rascunho.registrar("contratos", total, async () => {
+      Object.entries(rascunhoContratos).forEach(([id, campos]) => updateContrato(id, campos));
+      setRascunhoContratos({});
+    });
+  }, [rascunhoContratos]); // eslint-disable-line
+  useEffect(() => {
+    const total = Object.values(rascunhoEventos).reduce((s, f) => s + Object.keys(f).length, 0);
+    rascunho.registrar("eventos", total, async () => {
+      Object.entries(rascunhoEventos).forEach(([id, campos]) => updateEvento(id, campos));
+      setRascunhoEventos({});
+    });
+  }, [rascunhoEventos]); // eslint-disable-line
+
+  /* Grava o processo e, junto, os compromissos de agenda que as
+     ocorrências registradas pediram para criar. */
+  const gravarProcessoComAgenda = async (p) => {
+    const { __agendaPendente, ...limpo } = p;
+    updateProcesso(limpo);
+    for (const item of (__agendaPendente || [])) await addAgendaItem(item);
+  };
+
+  /* Salva só o que pertence a um processo (botão dentro do pop-up). */
+  const salvarProcessoRascunho = async (id) => {
+    const novo = rascunhoProcessos[id];
+    if (novo) await gravarProcessoComAgenda(novo);
+    descartarProcessoRascunho(id);
   };
 
   // Concilia uma planilha importada com o que já está salvo no banco:
@@ -4619,11 +5247,20 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
   };
 
   const filtrados = useMemo(() => applyFiltros(processos, filtros), [processos, filtros]);
+  const [ordemProc, ordenarProcPor] = useOrdenacao();
   const buscados = useMemo(() => {
-    if (!busca) return filtrados;
-    const q = busca.toLowerCase();
-    return filtrados.filter((p) => `${p.cliente} ${p.unidade} ${p.assunto} ${p.numero}`.toLowerCase().includes(q));
-  }, [filtrados, busca]);
+    const base = !busca ? filtrados : filtrados.filter((p) => {
+      const q = busca.toLowerCase();
+      const cod = codigosUnidade[`${p.cliente}|${p.unidade}`] || "";
+      return `${p.cliente} ${p.unidade} ${cod} ${p.assunto} ${p.numero}`.toLowerCase().includes(q);
+    });
+    return ordenarLista(base, ordemProc, {
+      codigoUnidade: (p) => codigosUnidade[`${p.cliente}|${p.unidade}`] || "",
+      status: (p) => statusLabel(p.statusAtual, p.tipo),
+      prazo: (p) => { const d = diasRestantes(p); return d === null ? null : d; },
+      atualizacao: (p) => diasSemAtualizacao(p),
+    });
+  }, [filtrados, busca, ordemProc, codigosUnidade]);
 
   // KPIs (sobre o conjunto filtrado)
   const total = filtrados.length;
@@ -4654,7 +5291,13 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
     return Object.values(map).filter((t) => t.total > 0);
   }, [filtrados]);
 
-  const bloqueados = useMemo(() => filtrados.map((p) => ({ p, bloqueio: processoBloqueado(p, processos) })).filter((x) => x.bloqueio), [filtrados, processos]);
+  const [ordemBloq, ordenarBloqPor] = useOrdenacao();
+  const [ordemUrg, ordenarUrgPor] = useOrdenacao();
+  const bloqueados = useMemo(() => ordenarLista(
+    filtrados.map((p) => ({ p, bloqueio: processoBloqueado(p, processos) })).filter((x) => x.bloqueio),
+    ordemBloq,
+    { assunto: (x) => x.p.assunto, cliente: (x) => x.p.cliente, dep: (x) => x.bloqueio.assunto, statusDep: (x) => statusLabel(x.bloqueio.statusAtual, x.bloqueio.tipo) }
+  ), [filtrados, processos, ordemBloq]);
 
   // Gráfico 1: por cliente OU por unidade (se um cliente estiver selecionado)
   const porClienteOuUnidade = useMemo(() => {
@@ -4678,13 +5321,15 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
   }, [filtrados]);
 
   const urgentes = useMemo(() => {
-    return filtrados.filter((p) => !STATUS_CONFIG[p.statusAtual].final)
+    const base = filtrados.filter((p) => !STATUS_CONFIG[p.statusAtual].final)
       .map((p) => ({ ...p, dr: diasRestantes(p) })).filter((p) => p.dr !== null)
       .sort((a, b) => a.dr - b.dr).slice(0, 6);
-  }, [filtrados]);
+    return ordenarLista(base, ordemUrg, { status: (p) => statusLabel(p.statusAtual, p.tipo) });
+  }, [filtrados, ordemUrg]);
 
   return (
-    <div style={{ fontFamily: "'Inter', sans-serif", background: COLORS.bg, minHeight: "100vh", width: "100%", color: COLORS.ice, display: "flex", flexDirection: "column", position: "relative" }}>
+    <RascunhoContext.Provider value={rascunho}>
+    <div style={{ fontFamily: "'Inter', sans-serif", background: COLORS.bg, minHeight: "100vh", width: "100%", color: COLORS.ice, display: "flex", flexDirection: "column", position: "relative", paddingBottom: rascunho.total > 0 ? 58 : 0 }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
         * { box-sizing: border-box; }
@@ -4702,7 +5347,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
       <aside style={{ width: 230, background: COLORS.panel, borderRight: `1px solid ${COLORS.border}`, padding: "22px 16px", flexShrink: 0 }}>
         <div style={{ marginBottom: 22 }}>
           {logoBase64 && <img src={logoBase64} alt="Logo" style={{ maxHeight: 80, maxWidth: 190, objectFit: "contain", marginBottom: 8, display: "block" }} />}
-          <div style={{ fontFamily: "'Oswald', sans-serif", fontWeight: 700, fontSize: 15, color: COLORS.ice, letterSpacing: "0.02em", textTransform: "uppercase" }}>Controle de Processos</div>
+          <div style={{ fontFamily: "'Oswald', sans-serif", fontWeight: 700, fontSize: 15, color: COLORS.ice, letterSpacing: "0.02em", textTransform: "uppercase" }}>Controle de Processos e Serviços</div>
         </div>
         <nav style={{ display: "flex", flexDirection: "column", gap: 3 }}>
           <div className="nav-item" onClick={() => setClientesOpen((o) => !o)} style={{
@@ -4753,7 +5398,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
             </div>
           )}
           {[
-            { id: "processos", label: "Controle de Processos", icon: ListChecks },
+            { id: "processos", label: "Controle de Processos e Serviços", icon: ListChecks },
             { id: "atualizacoes", label: "Relatório de Status", icon: History },
             ...(isAdmin ? [
               { id: "treinamentos", label: "Treinamentos e Comissões", icon: ClipboardCheck },
@@ -4790,7 +5435,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
               {tab === "unidades" && "Unidades de clientes"}
               {tab === "contratos" && "Serviços contratados"}
               {tab === "importar-contratos" && "Importar novos clientes/serviços"}
-              {tab === "processos" && "Controle de Processos"}
+              {tab === "processos" && "Controle de Processos e Serviços"}
               {tab === "atualizacoes" && "Relatório de Status"}
               {tab === "acessos" && "Área do Administrador"}
               {tab === "treinamentos" && "Treinamentos e Comissões"}
@@ -4804,7 +5449,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
               {tab === "contratos" && `${contratos.length} tarefa(s) de serviço cadastrada(s)`}
               {tab === "importar-contratos" && "Envie a planilha para atualizar clientes, unidades e serviços (valores são ignorados)"}
               {tab === "processos" && `${buscados.length} de ${processos.length} processo(s)`}
-              {tab === "atualizacoes" && "Atualizações marcadas para aparecer no relatório, registradas em Controle de Processos"}
+              {tab === "atualizacoes" && "Ocorrências marcadas para aparecer no relatório, registradas em Controle de Processos e Serviços"}
               {tab === "acessos" && "Gerenciar acessos, personalizar o logo e as cores do sistema"}
               {tab === "treinamentos" && "Cadastre eventos e marque a presença de cada técnico"}
               {tab === "ranking" && "Metas, retrabalho e participação em treinamentos, por técnico e por mês"}
@@ -4821,7 +5466,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
           )}
         </div>
 
-        {(tab === "dashboard-processos" || tab === "processos") && <FilterBar processos={processos} filtros={filtros} setFiltros={setFiltros} />}
+        {(tab === "dashboard-processos" || tab === "processos") && <FilterBar processos={processos} filtros={filtros} setFiltros={setFiltros} codigosUnidade={codigosUnidade} />}
 
         {tab === "dashboard-processos" && (
           <>
@@ -4908,7 +5553,12 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
                   <Lock size={13} /> Bloqueados por dependência de outro processo
                 </div>
                 <table>
-                  <thead><tr>{["Processo", "Cliente", "Depende da conclusão de", "Status da dependência"].map((h) => <th key={h} style={{ textAlign: "left", padding: "8px 18px", fontSize: 10.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", borderBottom: `1px solid ${COLORS.border}` }}>{h}</th>)}</tr></thead>
+                  <thead><tr>
+                    <Th campo="assunto" ordem={ordemBloq} ordenarPor={ordenarBloqPor} style={{ padding: "8px 18px" }}>Processo</Th>
+                    <Th campo="cliente" ordem={ordemBloq} ordenarPor={ordenarBloqPor} style={{ padding: "8px 18px" }}>Cliente</Th>
+                    <Th campo="dep" ordem={ordemBloq} ordenarPor={ordenarBloqPor} style={{ padding: "8px 18px" }}>Depende da conclusão de</Th>
+                    <Th campo="statusDep" ordem={ordemBloq} ordenarPor={ordenarBloqPor} style={{ padding: "8px 18px" }}>Status da dependência</Th>
+                  </tr></thead>
                   <tbody>
                     {bloqueados.map(({ p, bloqueio }) => {
                       const stB = STATUS_CONFIG[bloqueio.statusAtual];
@@ -4929,7 +5579,13 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
             <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "6px 0 4px" }}>
               <div style={{ fontSize: 12, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 600, padding: "12px 18px 10px" }}>Mais urgentes</div>
               <table>
-                <thead><tr>{["Cliente", "Assunto", "Status", "Prazo", "Técnico"].map((h) => <th key={h} style={{ textAlign: "left", padding: "8px 18px", fontSize: 10.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", borderBottom: `1px solid ${COLORS.border}` }}>{h}</th>)}</tr></thead>
+                <thead><tr>
+                  <Th campo="cliente" ordem={ordemUrg} ordenarPor={ordenarUrgPor} style={{ padding: "8px 18px" }}>Cliente</Th>
+                  <Th campo="assunto" ordem={ordemUrg} ordenarPor={ordenarUrgPor} style={{ padding: "8px 18px" }}>Assunto</Th>
+                  <Th campo="status" ordem={ordemUrg} ordenarPor={ordenarUrgPor} style={{ padding: "8px 18px" }}>Status</Th>
+                  <Th campo="dr" ordem={ordemUrg} ordenarPor={ordenarUrgPor} style={{ padding: "8px 18px" }}>Prazo</Th>
+                  <Th campo="tecnico" ordem={ordemUrg} ordenarPor={ordenarUrgPor} style={{ padding: "8px 18px" }}>Técnico</Th>
+                </tr></thead>
                 <tbody>
                   {urgentes.map((p) => {
                     const st = STATUS_CONFIG[p.statusAtual]; const prazo = prazoInfo(p.dr);
@@ -4956,7 +5612,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
           <>
             <div style={{ display: "flex", alignItems: "center", gap: 8, background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "8px 12px", marginBottom: 16, maxWidth: 420 }}>
               <Search size={14} color={COLORS.steel} />
-              <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar por cliente, assunto ou nº do processo..."
+              <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar por cliente, unidade, código, assunto ou nº do processo..."
                 style={{ background: "transparent", border: "none", outline: "none", color: COLORS.ice, fontSize: 13, width: "100%" }} />
             </div>
             {isAdmin && <BarraSelecaoExclusao contagem={processosSelecionados.size} rotulo="processo(s)" onLimpar={() => setProcessosSelecionados(new Set())} onExcluir={() => setConfirmExcluirProcessos(true)} />}
@@ -4971,7 +5627,21 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
                       const n = new Set(s);
                       if (todos) pagina.forEach((p) => n.delete(p.id)); else pagina.forEach((p) => n.add(p.id));
                       return n;
-                    })} /> : "", "Cliente / Unidade", "Assunto", "Tipo", "Técnico", "Nº processo", "Status", "Protocolo", "Previsão órgão", "Prazo", "Atualização", ""].map((h, i) => <th key={i} style={{ textAlign: "left", padding: "10px 16px", fontSize: 10.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", borderBottom: `1px solid ${COLORS.border}`, whiteSpace: "nowrap" }}>{h}</th>)}</tr></thead>
+                    })} /> : ""].map((h, i) => <Th key={i} ordem={ordemProc} ordenarPor={ordenarProcPor}>{h}</Th>)}
+                    <Th campo="cliente" ordem={ordemProc} ordenarPor={ordenarProcPor}>Cliente</Th>
+                    <Th campo="codigoUnidade" ordem={ordemProc} ordenarPor={ordenarProcPor}>Cód. unidade</Th>
+                    <Th campo="unidade" ordem={ordemProc} ordenarPor={ordenarProcPor}>Unidade</Th>
+                    <Th campo="assunto" ordem={ordemProc} ordenarPor={ordenarProcPor}>Assunto</Th>
+                    <Th campo="tipo" ordem={ordemProc} ordenarPor={ordenarProcPor}>Tipo</Th>
+                    <Th campo="tecnico" ordem={ordemProc} ordenarPor={ordenarProcPor}>Técnico</Th>
+                    <Th campo="numero" ordem={ordemProc} ordenarPor={ordenarProcPor}>Nº processo</Th>
+                    <Th campo="status" ordem={ordemProc} ordenarPor={ordenarProcPor}>Status</Th>
+                    <Th campo="dataProtocolo" ordem={ordemProc} ordenarPor={ordenarProcPor}>Protocolo</Th>
+                    <Th campo="dataPrevisaoOrgao" ordem={ordemProc} ordenarPor={ordenarProcPor}>Previsão órgão</Th>
+                    <Th campo="prazo" ordem={ordemProc} ordenarPor={ordenarProcPor}>Prazo</Th>
+                    <Th campo="atualizacao" ordem={ordemProc} ordenarPor={ordenarProcPor}>Atualização</Th>
+                    <Th ordem={ordemProc} ordenarPor={ordenarProcPor}>{""}</Th>
+                  </tr></thead>
                   <tbody>
                     {paginate(buscados, processosPage, processosPageSize).map((p) => {
                       const st = STATUS_CONFIG[p.statusAtual]; const dr = diasRestantes(p); const prazo = prazoInfo(dr); const ds = diasSemAtualizacao(p);
@@ -4984,8 +5654,9 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
                           </td>}
                           <td style={{ padding: "11px 16px", borderBottom: `1px solid ${COLORS.border}` }}>
                             <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.ice, display: "flex", alignItems: "center", gap: 6 }}><Building2 size={12} color={COLORS.steel} />{p.cliente}</div>
-                            <div style={{ fontSize: 11.5, color: COLORS.steel, marginTop: 2 }}>{p.unidade}</div>
                           </td>
+                          <td style={{ padding: "11px 16px", fontSize: 12, color: COLORS.steel, borderBottom: `1px solid ${COLORS.border}`, fontFamily: "monospace" }}>{codigosUnidade[`${p.cliente}|${p.unidade}`] || "—"}</td>
+                          <td style={{ padding: "11px 16px", fontSize: 12.5, color: COLORS.steelLight, borderBottom: `1px solid ${COLORS.border}` }}>{p.unidade}</td>
                           <td style={{ padding: "11px 16px", fontSize: 12.5, color: COLORS.steelLight, borderBottom: `1px solid ${COLORS.border}`, maxWidth: 220 }}>
                             {p.assunto}{bloqueio && <Lock size={11} color={COLORS.red} style={{ marginLeft: 6, verticalAlign: "middle" }} />}
                           </td>
@@ -5006,7 +5677,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
                         </tr>
                       );
                     })}
-                    {buscados.length === 0 && <tr><td colSpan={12} style={{ padding: 30, textAlign: "center", color: COLORS.steel, fontSize: 13 }}>Nenhum processo encontrado com esses filtros.</td></tr>}
+                    {buscados.length === 0 && <tr><td colSpan={14} style={{ padding: 30, textAlign: "center", color: COLORS.steel, fontSize: 13 }}>Nenhum processo encontrado com esses filtros.</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -5022,12 +5693,12 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
 
         {tab === "clientes" && <ClientesPage contratos={contratos} onAddContrato={(row) => addContratoManual(row, false)} isAdmin={isAdmin} onOpenCliente={abrirPopupCliente} onExcluirClientes={excluirClientes} />}
         {tab === "unidades" && <UnidadesPage contratos={contratos} onAddContrato={(row) => addContratoManual(row, false)} onOpenUnidade={abrirPopupUnidade} isAdmin={isAdmin} onExcluirUnidades={excluirUnidades} />}
-        {tab === "contratos" && <ServicosContratadosPage contratos={contratos} processos={processos} onUpdateContrato={updateContrato} onAddContrato={(row) => addContratoManual(row, true)} onExcluirContratos={excluirContratosEmCascata} isAdmin={isAdmin} onOpenContrato={abrirPopupContrato} onOpenServico={abrirPopupServico} />}
+        {tab === "contratos" && <ServicosContratadosPage contratos={contratos} processos={processos} onAddContrato={(row) => addContratoManual(row, true)} onExcluirContratos={excluirContratosEmCascata} isAdmin={isAdmin} onOpenContrato={abrirPopupContrato} onOpenServico={abrirPopupServico} edits={rascunhoContratos} onEdit={editarContratoRascunho} />}
         {tab === "importar-contratos" && isAdmin && <ImportarClientesContratosPage onImport={importarContratosPersistindo} />}
 
-        {tab === "atualizacoes" && <AtualizacoesPage processos={processos} onOpenProcesso={(p) => setSelected(p)} />}
+        {tab === "atualizacoes" && <AtualizacoesPage processos={processos} onOpenProcesso={(p) => setSelected(p)} codigosUnidade={codigosUnidade} />}
         {tab === "acessos" && isAdmin && <GerenciarAcessosPage usuarioLogado={usuarioLogado} logoBase64={logoBase64} onLogoAtualizado={onLogoAtualizado} />}
-        {tab === "treinamentos" && isAdmin && <TreinamentosPage eventos={eventos} onAddEvento={addEvento} onUpdateEvento={updateEvento} onExcluirEventos={excluirEventos} />}
+        {tab === "treinamentos" && isAdmin && <TreinamentosPage eventos={eventos} onAddEvento={addEvento} onExcluirEventos={excluirEventos} edits={rascunhoEventos} onEdit={editarEventoRascunho} />}
         {tab === "ranking" && isAdmin && <RankingTecnicosPage contratos={contratos} processos={processos} eventos={eventos} />}
       </main>
       </div>
@@ -5037,7 +5708,25 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
         <div style={{ fontSize: 10.5, color: COLORS.steel, marginTop: 2, letterSpacing: "0.03em" }}>Controle de Processos e Serviços</div>
       </footer>
 
-      {selected && <DetailModal processo={selected} processos={processos} contratos={contratos} onClose={() => setSelected(null)} onUpdate={(novo) => { updateProcesso(novo); setSelected(novo); }} onOpenProcesso={(p) => setSelected(p)} onConcluir={concluirProcesso} />}
+      {selected && (() => {
+        const base = processos.find((p) => p.id === selected.id) || selected;
+        const atual = rascunhoProcessos[selected.id] || base;
+        return (
+          <DetailModal
+            processo={atual}
+            processos={processos}
+            contratos={contratos}
+            codigoUnidade={codigoDaUnidade(atual.cliente, atual.unidade)}
+            onClose={() => setSelected(null)}
+            onUpdate={editarProcessoRascunho}
+            onOpenProcesso={(p) => setSelected(p)}
+            pendentes={pendentesDoProcesso(selected.id)}
+            onSalvar={() => salvarProcessoRascunho(selected.id)}
+            onDescartar={() => descartarProcessoRascunho(selected.id)}
+            salvando={rascunho.salvando}
+          />
+        );
+      })()}
 
       {popupAtual?.type === "cliente" && (
         <ClienteUnidadesModal cliente={popupAtual.cliente} contratos={contratos} idsUnidades={computarIdsUnidades(contratos)}
@@ -5050,16 +5739,20 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
       )}
       {popupAtual?.type === "contrato" && (
         <ContratoDetalheCompletoModal proposta={popupAtual.proposta} cliente={popupAtual.cliente} unidade={popupAtual.unidade}
-          contratos={contratos} processos={processos} onUpdateContrato={updateContrato} onDeleteContrato={deleteContrato} onExcluirContratos={excluirContratosEmCascata}
+          contratos={contratos} processos={processos} onDeleteContrato={deleteContrato} onExcluirContratos={excluirContratosEmCascata}
           onAddContrato={(row) => addContratoManual(row, true)}
           clientesExistentes={Array.from(new Set(contratos.map((c) => c.cliente))).sort()}
+          edits={rascunhoContratos} onEdit={editarContratoRascunho}
+          codigoUnidade={codigoDaUnidade(popupAtual.cliente, popupAtual.unidade)}
           onClose={fecharPopups} onBack={popupStack.length > 1 ? voltarPopup : null} />
       )}
       {popupAtual?.type === "servico" && (
         <ServicoUnicoModal proposta={popupAtual.proposta} cliente={popupAtual.cliente} unidade={popupAtual.unidade} servico={popupAtual.servico}
-          contratos={contratos} processos={processos} onUpdateContrato={updateContrato} onDeleteContrato={deleteContrato} onExcluirContratos={excluirContratosEmCascata}
+          contratos={contratos} processos={processos} onDeleteContrato={deleteContrato} onExcluirContratos={excluirContratosEmCascata}
           onAddContrato={(row) => addContratoManual(row, true)}
           clientesExistentes={Array.from(new Set(contratos.map((c) => c.cliente))).sort()}
+          edits={rascunhoContratos} onEdit={editarContratoRascunho}
+          codigoUnidade={codigoDaUnidade(popupAtual.cliente, popupAtual.unidade)}
           onClose={fecharPopups} onBack={popupStack.length > 1 ? voltarPopup : null} />
       )}
       {showNew && <NewProcessModal processos={processos} onClose={() => setShowNew(false)} onSave={async (p) => {
@@ -5067,7 +5760,9 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
         const { data } = await supabase.from("processos").insert(campos).select().single();
         setProcessos((prev) => [data ? rowToProcesso(data) : p, ...prev]);
       }} isAdmin={isAdmin} />}
+      <BarraRascunhoGlobal />
     </div>
+    </RascunhoContext.Provider>
   );
 }
 
