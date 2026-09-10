@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend
+  PieChart, Pie, Cell, Legend, LabelList, ComposedChart, Line
 } from "recharts";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
@@ -30,6 +30,16 @@ const supabase = createClient(
 );
 
 /* ============================================================
+   TIPOGRAFIA — Inter para textos e títulos, JetBrains Mono para
+   TODO número (KPIs, eixos de gráfico, datas, códigos e valores
+   em tabela). Os dois vêm do Google Fonts.
+   ============================================================ */
+const FONTES_GOOGLE = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap";
+const FONT_SANS = "'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif";
+const FONT_MONO = "'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace";
+const FONT_TITULO = FONT_SANS;
+
+/* ============================================================
    DESIGN TOKENS
    ============================================================ */
 const COLORS = {
@@ -53,6 +63,39 @@ const COLORS = {
    ============================================================ */
 let LOGO_BASE64 = null;
 let NOME_RESPONSAVEL = "Primers";
+
+/* ============================================================
+   PERSONALIZAÇÃO — tamanho do logo, cores dos gráficos e cores
+   do menu lateral. Tudo é lido da tabela `configuracoes` e pode
+   ser alterado na Área do Administrador, sem mexer no código.
+   ============================================================ */
+let LOGO_ALTURA_TELA = 80;        // px, menu lateral e tela de login
+let LOGO_ALTURA_RELATORIO = 44;   // px, cabeçalho dos PDFs exportados
+
+/* Uma cor por significado. Vale nos gráficos E nas etiquetas de
+   status das tabelas, para o sistema inteiro falar a mesma língua. */
+const CHART = {
+  concluido: "#3ecf8e",
+  andamento: "#4a90d9",
+  pendente: "#8493a6",
+  suspenso: "#f2894b",
+  destaque: "#e1483d",
+};
+const CHART_LABELS = {
+  concluido: "Concluído / positivo",
+  andamento: "Em andamento",
+  pendente: "Pendente / neutro",
+  suspenso: "Suspenso / atenção",
+  destaque: "Destaque / meta",
+};
+
+const MENU = {
+  fundo: "#101f30",
+  texto: "#b7c2cf",
+  ativo: "#e1483d",
+  ativoFundo: "rgba(225,72,61,0.16)",
+  titulo: "#eef2f6",
+};
 function rotuloResponsavel(valor) { return valor === "Primers" ? NOME_RESPONSAVEL : valor; }
 function hexParaRgba(hex, alpha) {
   const h = (hex || "").replace("#", "");
@@ -78,6 +121,48 @@ function aplicarTema(cfg) {
   }
   LOGO_BASE64 = cfg.logo_base64 || null;
   NOME_RESPONSAVEL = cfg.nome_empresa && cfg.nome_empresa.trim() ? cfg.nome_empresa.trim() : "Primers";
+
+  LOGO_ALTURA_TELA = Number(cfg.logo_altura_tela) > 0 ? Number(cfg.logo_altura_tela) : 80;
+  LOGO_ALTURA_RELATORIO = Number(cfg.logo_altura_relatorio) > 0 ? Number(cfg.logo_altura_relatorio) : 44;
+
+  if (cfg.cor_grafico_concluido) CHART.concluido = cfg.cor_grafico_concluido;
+  if (cfg.cor_grafico_andamento) CHART.andamento = cfg.cor_grafico_andamento;
+  if (cfg.cor_grafico_pendente) CHART.pendente = cfg.cor_grafico_pendente;
+  if (cfg.cor_grafico_suspenso) CHART.suspenso = cfg.cor_grafico_suspenso;
+  if (cfg.cor_grafico_destaque) CHART.destaque = cfg.cor_grafico_destaque;
+
+  MENU.fundo = cfg.cor_menu_fundo || COLORS.panel;
+  MENU.texto = cfg.cor_menu_texto || "#b7c2cf";
+  MENU.ativo = cfg.cor_menu_ativo || COLORS.red;
+  MENU.ativoFundo = hexParaRgba(MENU.ativo, 0.16);
+  MENU.titulo = cfg.cor_menu_titulo || "#eef2f6";
+
+  sincronizarCoresSemanticas();
+}
+
+/* Reaplica as 5 cores nas etiquetas de status usadas nas tabelas,
+   para que gráfico e tabela nunca fiquem com cores diferentes
+   para a mesma coisa. */
+function sincronizarCoresSemanticas() {
+  const dim = (c) => hexParaRgba(c, 0.15);
+  const porGrupo = {
+    aguardando: CHART.pendente, iniciado: CHART.andamento, montagem: CHART.suspenso,
+    analise: CHART.andamento, exigencia: CHART.suspenso, concluido: CHART.concluido,
+    indeferido: CHART.destaque, cancelado: CHART.pendente,
+  };
+  Object.values(STATUS_CONFIG).forEach((cfgSt) => {
+    const cor = porGrupo[cfgSt.grupo] || CHART.pendente;
+    cfgSt.fg = cor; cfgSt.bg = dim(cor);
+  });
+  STATUS_PARCELA_COLOR["Pendente"] = { fg: CHART.pendente, bg: dim(CHART.pendente) };
+  STATUS_PARCELA_COLOR["Em andamento"] = { fg: CHART.andamento, bg: dim(CHART.andamento) };
+  STATUS_PARCELA_COLOR["Concluído"] = { fg: CHART.concluido, bg: dim(CHART.concluido) };
+  STATUS_PARCELA_COLOR["Suspenso"] = { fg: CHART.suspenso, bg: dim(CHART.suspenso) };
+  STATUS_CONTRATO_COLOR["Em Andamento"] = { fg: CHART.andamento, bg: dim(CHART.andamento) };
+  STATUS_CONTRATO_COLOR["Pendente"] = { fg: CHART.pendente, bg: dim(CHART.pendente) };
+  STATUS_CONTRATO_COLOR["Suspenso"] = { fg: CHART.suspenso, bg: dim(CHART.suspenso) };
+  STATUS_CONTRATO_COLOR["Concluído"] = { fg: CHART.concluido, bg: dim(CHART.concluido) };
+  STATUS_CONTRATO_COLOR["Cancelado"] = { fg: CHART.destaque, bg: dim(CHART.destaque) };
 }
 
 /* ============================================================
@@ -518,12 +603,12 @@ function diasSemAtualizacao(proc) {
   return Math.round((hoje - new Date(proc.ultimaAtualizacao)) / 86400000);
 }
 function prazoInfo(dias) {
+  const dim = (c) => hexParaRgba(c, 0.15);
   if (dias === null) return { label: "—", fg: COLORS.steel, bg: "rgba(255,255,255,0.05)" };
-  if (dias < 0) return { label: `Vencido (${Math.abs(dias)}d)`, fg: "#ffb3ac", bg: COLORS.overdueDim };
-  if (dias <= 5) return { label: `${dias}d restantes`, fg: COLORS.red, bg: COLORS.redDim };
-  if (dias <= 15) return { label: `${dias}d restantes`, fg: COLORS.orange, bg: COLORS.orangeDim };
-  if (dias <= 30) return { label: `${dias}d restantes`, fg: COLORS.yellow, bg: COLORS.yellowDim };
-  return { label: `${dias}d restantes`, fg: COLORS.green, bg: COLORS.greenDim };
+  if (dias < 0) return { label: `Vencido (${Math.abs(dias)}d)`, fg: CHART.destaque, bg: dim(CHART.destaque) };
+  if (dias <= 15) return { label: `${dias}d restantes`, fg: CHART.suspenso, bg: dim(CHART.suspenso) };
+  if (dias <= 30) return { label: `${dias}d restantes`, fg: CHART.andamento, bg: dim(CHART.andamento) };
+  return { label: `${dias}d restantes`, fg: CHART.concluido, bg: dim(CHART.concluido) };
 }
 function fmtDate(iso) {
   if (!iso) return "—";
@@ -746,7 +831,7 @@ function BotaoSalvar({ pendentes, onSalvar, onDescartar, salvando, compacto }) {
         background: ativo ? COLORS.green : "rgba(255,255,255,0.06)", border: "none",
         color: ativo ? "#0a1420" : COLORS.steel, borderRadius: 7,
         padding: compacto ? "7px 14px" : "9px 18px", fontSize: 12.5, fontWeight: 700,
-        cursor: ativo && !salvando ? "pointer" : "default", fontFamily: "'Oswald', sans-serif",
+        cursor: ativo && !salvando ? "pointer" : "default", fontFamily: FONT_TITULO,
         letterSpacing: "0.02em", textTransform: "uppercase",
       }}>
         <Save size={14} /> {salvando ? "Salvando..." : ativo ? `Salvar alterações (${pendentes})` : "Salvar alterações"}
@@ -797,6 +882,66 @@ function mapaCodigosUnidade(contratos) {
   return m;
 }
 
+/* ============================================================
+   PADRÃO VISUAL DOS GRÁFICOS — o mesmo em todas as telas:
+   só linhas de grade horizontais e discretas, eixos apagados,
+   números em fonte monoespaçada, legenda com bolinhas, rótulo do
+   valor em cima (ou ao lado) da barra e tooltip escuro.
+   ============================================================ */
+const GRADE = { strokeDasharray: "2 5", stroke: "rgba(255,255,255,0.09)" };
+const EIXO_TICK = { fill: COLORS.steel, fontSize: 10.5, fontFamily: FONT_MONO };
+const EIXO_LINHA = { stroke: "rgba(255,255,255,0.10)" };
+function estiloTooltip() {
+  return {
+    background: COLORS.panelAlt, border: `1px solid ${COLORS.borderStrong}`, borderRadius: 9,
+    fontSize: 12, fontFamily: FONT_SANS, boxShadow: "0 12px 28px rgba(0,0,0,0.5)", padding: "9px 11px",
+  };
+}
+const LEGENDA = {
+  iconType: "circle", iconSize: 9,
+  wrapperStyle: { fontSize: 11.5, color: COLORS.steelLight, fontFamily: FONT_SANS, paddingTop: 8 },
+};
+const ROTULO_TOPO = { position: "top", fill: COLORS.steelLight, fontSize: 11, fontFamily: FONT_MONO, fontWeight: 700, offset: 7 };
+const ROTULO_LADO = { position: "right", fill: COLORS.steelLight, fontSize: 11, fontFamily: FONT_MONO, fontWeight: 700, offset: 8 };
+const semZero = (v) => (v > 0 ? v : "");
+
+/* Cartão padrão que embrulha cada gráfico: título, subtítulo,
+   etiqueta à direita e uma faixa de "chips" no rodapé. */
+function PainelGrafico({ titulo, subtitulo, badge, children, rodape, style }) {
+  return (
+    <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: 20, ...style }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+        <div style={{ fontFamily: FONT_SANS, fontSize: 14, fontWeight: 700, color: COLORS.ice, letterSpacing: "-0.01em" }}>{titulo}</div>
+        {badge && <span style={{ fontSize: 10.5, fontFamily: FONT_MONO, color: COLORS.steel, background: "rgba(255,255,255,0.06)", padding: "3px 9px", borderRadius: 999, flexShrink: 0, whiteSpace: "nowrap" }}>{badge}</span>}
+      </div>
+      {subtitulo && <div style={{ fontSize: 11.5, color: COLORS.steel, marginTop: 4, lineHeight: 1.5 }}>{subtitulo}</div>}
+      <div style={{ marginTop: 16 }}>{children}</div>
+      {rodape && <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center", marginTop: 14 }}>{rodape}</div>}
+    </div>
+  );
+}
+
+function ChipGrafico({ children, cor }) {
+  const c = cor || COLORS.steelLight;
+  return (
+    <span style={{
+      fontSize: 11.5, fontFamily: FONT_SANS, fontWeight: 600, color: c,
+      background: hexParaRgba(c, 0.14), border: `1px solid ${hexParaRgba(c, 0.4)}`,
+      borderRadius: 7, padding: "5px 11px", whiteSpace: "nowrap",
+    }}>{children}</span>
+  );
+}
+
+/* Número grande no meio das roscas, como na referência. */
+function CentroRosca({ valor, legenda, cor }) {
+  return (
+    <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+      <div style={{ fontFamily: FONT_MONO, fontSize: 22, fontWeight: 700, color: cor || COLORS.ice, lineHeight: 1 }}>{valor}</div>
+      {legenda && <div style={{ fontSize: 10, color: COLORS.steel, marginTop: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{legenda}</div>}
+    </div>
+  );
+}
+
 function Pill({ children, fg, bg, stamp }) {
   return (
     <span style={{
@@ -805,7 +950,7 @@ function Pill({ children, fg, bg, stamp }) {
       fontSize: 11, fontWeight: 700, letterSpacing: stamp ? "0.06em" : "0.02em",
       textTransform: stamp ? "uppercase" : "none", color: fg, background: bg,
       border: stamp ? `1px solid ${fg}55` : "1px solid transparent",
-      fontFamily: stamp ? "'Oswald', sans-serif" : "'Inter', sans-serif", whiteSpace: "nowrap",
+      fontFamily: FONT_SANS, whiteSpace: "nowrap",
     }}>{children}</span>
   );
 }
@@ -820,7 +965,7 @@ function KpiCard({ icon: Icon, label, value, accent, sub }) {
         </div>
         <span style={{ fontSize: 10.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 600 }}>{label}</span>
       </div>
-      <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 26, fontWeight: 600, color: COLORS.ice, lineHeight: 1 }}>{value}</div>
+      <div style={{ fontFamily: FONT_MONO, fontSize: 24, fontWeight: 700, color: COLORS.ice, lineHeight: 1.1, letterSpacing: "-0.01em" }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: COLORS.steel, marginTop: 5 }}>{sub}</div>}
     </div>
   );
@@ -830,7 +975,7 @@ function Select({ value, onChange, options, placeholder }) {
   return (
     <select value={value} onChange={(e) => onChange(e.target.value)} style={{
       background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 8,
-      padding: "8px 10px", color: COLORS.steelLight, fontSize: 12.5, fontFamily: "'Inter', sans-serif",
+      padding: "8px 10px", color: COLORS.steelLight, fontSize: 12.5, fontFamily: FONT_SANS,
     }}>
       {placeholder && <option value="Todos">{placeholder}</option>}
       {options.map((o) => <option key={o} value={o}>{o}</option>)}
@@ -900,7 +1045,7 @@ function CampoMultiSelecao({ grupo }) {
         ))}
         <input value={busca} onChange={(e) => { setBusca(e.target.value); setAberto(true); }} disabled={bloqueado}
           placeholder={selecionados.length ? "" : placeholder}
-          style={{ flex: "1 1 90px", minWidth: 60, background: "transparent", border: "none", outline: "none", color: COLORS.ice, fontSize: 12.5, fontFamily: "'Inter', sans-serif" }} />
+          style={{ flex: "1 1 90px", minWidth: 60, background: "transparent", border: "none", outline: "none", color: COLORS.ice, fontSize: 12.5, fontFamily: FONT_SANS }} />
         <div style={{ position: "absolute", right: 8, top: 0, bottom: 0, display: "flex", alignItems: "center", gap: 4 }}>
           {selecionados.length > 0 && (
             <button onClick={(e) => { e.stopPropagation(); grupo.onApply([]); }} title="Limpar" style={{ background: "none", border: "none", cursor: "pointer", color: COLORS.steel, display: "flex", padding: 0 }}><X size={14} /></button>
@@ -940,7 +1085,7 @@ function BotaoFiltroPopup({ grupos }) {
     <div style={{ display: "inline-block" }}>
       <button onClick={() => setOpen(true)} style={{
         display: "flex", alignItems: "center", gap: 7, background: COLORS.panel, border: `1px solid ${totalAtivos ? COLORS.red + "77" : COLORS.border}`,
-        borderRadius: 8, padding: "8px 14px", color: totalAtivos ? COLORS.ice : COLORS.steelLight, fontSize: 12.5, cursor: "pointer", fontFamily: "'Inter', sans-serif",
+        borderRadius: 8, padding: "8px 14px", color: totalAtivos ? COLORS.ice : COLORS.steelLight, fontSize: 12.5, cursor: "pointer", fontFamily: FONT_SANS,
       }}>
         <Filter size={13} /> Filtro
         {totalAtivos > 0 && <span style={{ background: COLORS.red, color: "#fff", borderRadius: 999, minWidth: 18, height: 18, fontSize: 10.5, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 5px" }}>{totalAtivos}</span>}
@@ -961,7 +1106,7 @@ function BotaoFiltroPopup({ grupos }) {
             {grupos.map((g) => <CampoMultiSelecao key={g.label} grupo={g} />)}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>
               <button onClick={limparTudo} style={{ background: "transparent", border: "none", color: COLORS.steel, fontSize: 12, cursor: "pointer", textDecoration: "underline" }}>Limpar todos os filtros</button>
-              <button onClick={() => setOpen(false)} style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 22px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
+              <button onClick={() => setOpen(false)} style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 22px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.02em", textTransform: "uppercase" }}>
                 Fechar
               </button>
             </div>
@@ -1035,13 +1180,13 @@ function NewProcessModal({ onClose, onSave, processos, isAdmin }) {
     <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
       <label style={{ fontSize: 11, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}>{label}</label>
       <input type={type} value={form[key]} onChange={set(key)} placeholder={placeholder}
-        style={{ background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "8px 10px", color: COLORS.ice, fontSize: 13, fontFamily: "'Inter', sans-serif", outline: "none" }} />
+        style={{ background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "8px 10px", color: COLORS.ice, fontSize: 13, fontFamily: FONT_SANS, outline: "none" }} />
     </div>
   );
   const selectField = (label, key, options, getLabel) => (
     <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
       <label style={{ fontSize: 11, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}>{label}</label>
-      <select value={form[key]} onChange={set(key)} style={{ background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "8px 10px", color: COLORS.ice, fontSize: 13, fontFamily: "'Inter', sans-serif", outline: "none" }}>
+      <select value={form[key]} onChange={set(key)} style={{ background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "8px 10px", color: COLORS.ice, fontSize: 13, fontFamily: FONT_SANS, outline: "none" }}>
         {options.map((o) => <option key={o} value={o}>{getLabel ? getLabel(o) : o}</option>)}
       </select>
     </div>
@@ -1051,7 +1196,7 @@ function NewProcessModal({ onClose, onSave, processos, isAdmin }) {
     <div style={{ position: "fixed", inset: 0, background: "rgba(5,10,16,0.7)", backdropFilter: "blur(2px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 16 }} onClick={onClose}>
       <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.borderStrong}`, borderRadius: 12, width: "100%", maxWidth: 680, maxHeight: "88vh", overflowY: "auto", padding: 24 }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
-          <h2 style={{ fontFamily: "'Oswald', sans-serif", fontSize: 19, fontWeight: 600, color: COLORS.ice, textTransform: "uppercase", letterSpacing: "0.03em" }}>Novo processo</h2>
+          <h2 style={{ fontFamily: FONT_TITULO, fontSize: 19, fontWeight: 600, color: COLORS.ice, textTransform: "uppercase", letterSpacing: "0.03em" }}>Novo processo</h2>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: COLORS.steel }}><X size={20} /></button>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
@@ -1076,7 +1221,7 @@ function NewProcessModal({ onClose, onSave, processos, isAdmin }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
               <label style={{ fontSize: 11, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}>Depende da conclusão de outro processo? (opcional)</label>
               <select value={form.dependeDeId} onChange={(e) => setForm((f) => ({ ...f, dependeDeId: e.target.value }))}
-                style={{ background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "8px 10px", color: COLORS.ice, fontSize: 13, fontFamily: "'Inter', sans-serif", outline: "none" }}>
+                style={{ background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "8px 10px", color: COLORS.ice, fontSize: 13, fontFamily: FONT_SANS, outline: "none" }}>
                 <option value="">Nenhuma dependência</option>
                 {processos.filter((p) => !STATUS_CONFIG[p.statusAtual].final).map((p) => (
                   <option key={p.id} value={p.id}>{p.cliente} — {p.assunto}</option>
@@ -1095,7 +1240,7 @@ function NewProcessModal({ onClose, onSave, processos, isAdmin }) {
               dependeDeId: form.dependeDeId || null,
             }));
             onClose();
-          }} style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.03em", textTransform: "uppercase" }}>
+          }} style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.03em", textTransform: "uppercase" }}>
             Salvar processo
           </button>
         </div>
@@ -1172,11 +1317,11 @@ function DocumentosChecklistTab({ processo, onUpdate }) {
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 24, marginBottom: 16 }}>
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 10, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em" }}>Recebidos/obtidos</div>
-          <div style={{ fontSize: 18, color: progDoc === 100 ? COLORS.green : COLORS.ice, fontWeight: 700, fontFamily: "'Oswald', sans-serif" }}>{progDoc}%</div>
+          <div style={{ fontSize: 18, color: progDoc === 100 ? COLORS.green : COLORS.ice, fontWeight: 700, fontFamily: FONT_TITULO }}>{progDoc}%</div>
         </div>
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 10, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em" }}>Conformidade checklist</div>
-          <div style={{ fontSize: 18, color: progChk === 100 ? COLORS.green : COLORS.ice, fontWeight: 700, fontFamily: "'Oswald', sans-serif" }}>{progChk}%</div>
+          <div style={{ fontSize: 18, color: progChk === 100 ? COLORS.green : COLORS.ice, fontWeight: 700, fontFamily: FONT_TITULO }}>{progChk}%</div>
         </div>
       </div>
 
@@ -1198,7 +1343,7 @@ function DocumentosChecklistTab({ processo, onUpdate }) {
         <div style={{ display: "grid", gridTemplateColumns: "0.6fr 1fr auto", gap: 8 }}>
           <input type="date" value={novo.validade} onChange={(e) => setNovo((n) => ({ ...n, validade: e.target.value }))} style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "7px 9px", color: COLORS.ice, fontSize: 12 }} />
           <input placeholder="Observação" value={novo.observacao} onChange={(e) => setNovo((n) => ({ ...n, observacao: e.target.value }))} style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "7px 9px", color: COLORS.ice, fontSize: 12 }} />
-          <button onClick={adicionar} style={{ display: "flex", alignItems: "center", gap: 6, background: COLORS.red, border: "none", color: "#fff", borderRadius: 6, padding: "7px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase", whiteSpace: "nowrap" }}>
+          <button onClick={adicionar} style={{ display: "flex", alignItems: "center", gap: 6, background: COLORS.red, border: "none", color: "#fff", borderRadius: 6, padding: "7px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.02em", textTransform: "uppercase", whiteSpace: "nowrap" }}>
             <Plus size={13} /> Adicionar
           </button>
         </div>
@@ -1302,20 +1447,20 @@ function RelatorioTab({ processo }) {
       <div style={{ display: "flex", gap: 10, marginBottom: 18, flexWrap: "wrap" }}>
         <div style={{ flex: 1, minWidth: 160, background: pronto ? COLORS.greenDim : COLORS.orangeDim, border: `1px solid ${pronto ? COLORS.green : COLORS.orange}55`, borderRadius: 10, padding: 14 }}>
           <div style={{ fontSize: 10.5, color: pronto ? COLORS.green : COLORS.orange, textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 700 }}>Status do protocolo</div>
-          <div style={{ fontSize: 15, color: COLORS.ice, fontWeight: 700, fontFamily: "'Oswald', sans-serif", marginTop: 4 }}>{pronto ? "Pronto para protocolar" : `${pendencias.length} pendência(s)`}</div>
+          <div style={{ fontSize: 15, color: COLORS.ice, fontWeight: 700, fontFamily: FONT_TITULO, marginTop: 4 }}>{pronto ? "Pronto para protocolar" : `${pendencias.length} pendência(s)`}</div>
         </div>
         <div style={{ flex: 1, minWidth: 140, background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14 }}>
           <div style={{ fontSize: 10.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 700 }}>Documentos</div>
-          <div style={{ fontSize: 20, color: COLORS.ice, fontWeight: 700, fontFamily: "'Oswald', sans-serif", marginTop: 4 }}>{docPct}%</div>
+          <div style={{ fontSize: 20, color: COLORS.ice, fontWeight: 700, fontFamily: FONT_TITULO, marginTop: 4 }}>{docPct}%</div>
         </div>
         <div style={{ flex: 1, minWidth: 140, background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 14 }}>
           <div style={{ fontSize: 10.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 700 }}>Checklist técnico</div>
-          <div style={{ fontSize: 20, color: COLORS.ice, fontWeight: 700, fontFamily: "'Oswald', sans-serif", marginTop: 4 }}>{chkPct}%</div>
+          <div style={{ fontSize: 20, color: COLORS.ice, fontWeight: 700, fontFamily: FONT_TITULO, marginTop: 4 }}>{chkPct}%</div>
         </div>
       </div>
 
       <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
-        <button onClick={() => imprimirRelatorio(processo)} style={{ display: "flex", alignItems: "center", gap: 7, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
+        <button onClick={() => imprimirRelatorio(processo)} style={{ display: "flex", alignItems: "center", gap: 7, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.02em", textTransform: "uppercase" }}>
           Imprimir / salvar PDF
         </button>
         <button onClick={exportarCSV} style={{ display: "flex", alignItems: "center", gap: 7, background: "transparent", border: `1px solid ${COLORS.border}`, color: COLORS.steelLight, borderRadius: 7, padding: "9px 14px", fontSize: 13, cursor: "pointer" }}>
@@ -1357,7 +1502,7 @@ function StatusServicoTab({ processo, onUpdate, onRegistrar, onEditar, onExcluir
           {ocorrencias.length} ocorrência(s) registrada(s) neste serviço.
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={onRegistrar} style={{ display: "flex", alignItems: "center", gap: 6, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "7px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
+          <button onClick={onRegistrar} style={{ display: "flex", alignItems: "center", gap: 6, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "7px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.02em", textTransform: "uppercase" }}>
             <ClipboardList size={13} /> Registrar ocorrência
           </button>
           <button onClick={() => imprimirStatusServico(processo)} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${COLORS.border}`, color: COLORS.steelLight, borderRadius: 7, padding: "7px 12px", fontSize: 12, cursor: "pointer" }}>
@@ -1374,7 +1519,7 @@ function StatusServicoTab({ processo, onUpdate, onRegistrar, onEditar, onExcluir
 
       {ocorrencias.map((a) => (
         <div key={a.id} className="row-hover" style={{ display: "flex", gap: 12, padding: "11px 6px", borderBottom: `1px solid ${COLORS.border}`, borderRadius: 6 }}>
-          <div style={{ width: 74, flexShrink: 0, fontSize: 11.5, color: COLORS.steel, fontFamily: "monospace" }}>{fmtDate(a.data)}</div>
+          <div style={{ width: 74, flexShrink: 0, fontSize: 11.5, color: COLORS.steel, fontFamily: FONT_MONO }}>{fmtDate(a.data)}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 3, flexWrap: "wrap" }}>
               <Pill fg={COLORS.steelLight} bg="rgba(255,255,255,0.06)">{a.tipo}</Pill>
@@ -1597,7 +1742,7 @@ function RegistrarOcorrenciaModal({ processo, onClose, onSalvar, tipoInicial, em
   };
 
   const labelCampo = { fontSize: 10.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.03em", display: "block", marginBottom: 4, fontWeight: 600 };
-  const inputBase = { width: "100%", background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "8px 10px", color: COLORS.ice, fontSize: 12.5, fontFamily: "'Inter', sans-serif", outline: "none" };
+  const inputBase = { width: "100%", background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "8px 10px", color: COLORS.ice, fontSize: 12.5, fontFamily: FONT_SANS, outline: "none" };
 
   return (
     <ModalShell title={editando ? "Editar ocorrência" : "Registrar ocorrência"} onClose={onClose} maxWidth={620}>
@@ -1689,7 +1834,7 @@ function RegistrarOcorrenciaModal({ processo, onClose, onSalvar, tipoInicial, em
         <button onClick={registrar} disabled={!descricao.trim()} style={{
           background: descricao.trim() ? COLORS.red : "rgba(255,255,255,0.06)", border: "none",
           color: descricao.trim() ? "#fff" : COLORS.steel, borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700,
-          cursor: descricao.trim() ? "pointer" : "default", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.03em", textTransform: "uppercase",
+          cursor: descricao.trim() ? "pointer" : "default", fontFamily: FONT_TITULO, letterSpacing: "0.03em", textTransform: "uppercase",
         }}>
           {editando ? "Salvar ocorrência" : "Registrar ocorrência"}
         </button>
@@ -1774,7 +1919,7 @@ function LinhaDoTempoTab({ processo }) {
           {eventos.map((e, i) => (
             <div key={i} style={{ position: "relative", paddingBottom: 20 }}>
               <div style={{ position: "absolute", left: -22, top: 2, width: 11, height: 11, borderRadius: "50%", background: e.cor, border: `2px solid ${COLORS.panel}` }} />
-              <div style={{ fontSize: 11, color: COLORS.steel, fontFamily: "monospace" }}>{fmtDate(e.data)}</div>
+              <div style={{ fontSize: 11, color: COLORS.steel, fontFamily: FONT_MONO }}>{fmtDate(e.data)}</div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2, flexWrap: "wrap" }}>
                 <div style={{ fontSize: 12.5, color: COLORS.ice, lineHeight: 1.4 }}>{e.label}</div>
                 {e.prazo && <Pill fg={corPrazo(e.prazo)} bg={`${corPrazo(e.prazo)}22`}>{labelPrazo(e.prazo)}</Pill>}
@@ -1792,11 +1937,13 @@ function LinhaDoTempoTab({ processo }) {
    ============================================================ */
 function printBrandCSS() {
   return `
+  @import url('${FONTES_GOOGLE}');
   * { box-sizing: border-box; }
-  body{font-family:'Segoe UI', Arial, Helvetica, sans-serif;color:#16283d;margin:0;background:#fff;}
+  body{font-family:${FONT_SANS};color:#16283d;margin:0;background:#fff;}
+  td, th, .kv b, .badge { font-variant-numeric: tabular-nums; }
   .brand{background:${COLORS.bg};padding:26px 40px;border-bottom:5px solid ${COLORS.red};}
   .brand-row{display:flex;align-items:center;gap:10px;min-height:40px;}
-  .brand-name{font-family:Georgia,'Times New Roman',serif;font-weight:700;font-size:22px;color:${COLORS.red};letter-spacing:0.02em;}
+  .brand-name{font-family:${FONT_SANS};font-weight:800;font-size:22px;color:${COLORS.red};letter-spacing:-0.01em;}
   .brand-title{color:#eef2f6;font-size:16px;margin-top:16px;font-weight:600;}
   .brand-meta{color:#b7c2cf;font-size:12px;margin-top:4px;}
   .content{padding:30px 40px;}
@@ -1813,7 +1960,7 @@ function printBrandCSS() {
 }
 function brandHeader(title, subtitle) {
   const logoHtml = LOGO_BASE64
-    ? `<img src="${LOGO_BASE64}" style="max-height:44px;max-width:200px;object-fit:contain;" />`
+    ? `<img src="${LOGO_BASE64}" style="max-height:${LOGO_ALTURA_RELATORIO}px;max-width:${Math.round(LOGO_ALTURA_RELATORIO * 5)}px;object-fit:contain;" />`
     : `<span class="brand-name">CONTROLE DE PROCESSOS E SERVIÇOS</span>`;
   return `<div class="brand">
     <div class="brand-row">${logoHtml}</div>
@@ -2006,13 +2153,13 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
             <div>
               <div style={{ fontSize: 11, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em" }}>{processo.cliente} · {rotuloUnidade(processo.unidade, codigoUnidade)}</div>
-              <h2 style={{ fontFamily: "'Oswald', sans-serif", fontSize: 18, color: COLORS.ice, fontWeight: 600, marginTop: 3 }}>{processo.assunto}</h2>
+              <h2 style={{ fontFamily: FONT_TITULO, fontSize: 18, color: COLORS.ice, fontWeight: 600, marginTop: 3 }}>{processo.assunto}</h2>
             </div>
             <button onClick={fechar} style={{ background: "none", border: "none", cursor: "pointer", color: COLORS.steel }}><X size={20} /></button>
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
             <select value={processo.statusAtual} onChange={(e) => patch({ statusAtual: e.target.value })}
-              style={{ background: status.bg, color: status.fg, border: `1px solid ${status.fg}55`, borderRadius: 999, padding: "4px 10px", fontSize: 11, fontWeight: 700, fontFamily: "'Oswald', sans-serif", letterSpacing: "0.03em" }}>
+              style={{ background: status.bg, color: status.fg, border: `1px solid ${status.fg}55`, borderRadius: 999, padding: "4px 10px", fontSize: 11, fontWeight: 700, fontFamily: FONT_TITULO, letterSpacing: "0.03em" }}>
               {STATUS_KEYS.map((k) => <option key={k} value={k} style={{ background: COLORS.panel, color: COLORS.ice }}>{statusLabel(k, processo.tipo)}</option>)}
             </select>
             <Pill fg={COLORS.steelLight} bg="rgba(255,255,255,0.06)">{processo.tipo}</Pill>
@@ -2043,7 +2190,7 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
 
           <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap", alignItems: "center", background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "10px 12px" }}>
             <span style={{ fontSize: 11, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.03em", fontWeight: 700 }}>Registrar ocorrência:</span>
-            <button onClick={() => { setOcorrenciaEmEdicao(null); setShowOcorrencia(true); }} style={{ display: "flex", alignItems: "center", gap: 6, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "7px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
+            <button onClick={() => { setOcorrenciaEmEdicao(null); setShowOcorrencia(true); }} style={{ display: "flex", alignItems: "center", gap: 6, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "7px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.02em", textTransform: "uppercase" }}>
               <ClipboardList size={14} /> Nova ocorrência
             </button>
             <span style={{ fontSize: 11, color: COLORS.steel, fontStyle: "italic", flex: 1, minWidth: 200 }}>
@@ -2062,11 +2209,11 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
           {!iniciado && (
             <div style={{ textAlign: "center", padding: "50px 20px" }}>
               <Clock size={34} color={COLORS.steel} style={{ marginBottom: 14 }} />
-              <div style={{ fontSize: 15, color: COLORS.ice, fontFamily: "'Oswald', sans-serif", fontWeight: 600, marginBottom: 6 }}>Este serviço ainda não foi iniciado</div>
+              <div style={{ fontSize: 15, color: COLORS.ice, fontFamily: FONT_TITULO, fontWeight: 600, marginBottom: 6 }}>Este serviço ainda não foi iniciado</div>
               <div style={{ fontSize: 12.5, color: COLORS.steel, marginBottom: 20, maxWidth: 380, marginLeft: "auto", marginRight: "auto" }}>
                 Registre a ocorrência de "Início do serviço" para lançar a data de início e a previsão de conclusão da análise documental / checklist. Documentos, Checklist, Linha do tempo e Status de Serviço ficam disponíveis depois disso.
               </div>
-              <button onClick={() => { setOcorrenciaEmEdicao(null); setShowOcorrencia(true); }} style={{ display: "inline-flex", alignItems: "center", gap: 8, background: COLORS.red, border: "none", color: "#fff", borderRadius: 8, padding: "11px 24px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.03em", textTransform: "uppercase" }}>
+              <button onClick={() => { setOcorrenciaEmEdicao(null); setShowOcorrencia(true); }} style={{ display: "inline-flex", alignItems: "center", gap: 8, background: COLORS.red, border: "none", color: "#fff", borderRadius: 8, padding: "11px 24px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.03em", textTransform: "uppercase" }}>
                 <ClipboardList size={15} /> Registrar início do serviço
               </button>
               <div style={{ marginTop: 24, textAlign: "left", maxWidth: 380, marginLeft: "auto", marginRight: "auto" }}>
@@ -2129,7 +2276,7 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
               <Row label="Login" value={processo.login || "—"} />
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${COLORS.border}` }}>
                 <span style={{ fontSize: 12, color: COLORS.steel }}>Senha</span>
-                <button onClick={() => setShowSenha((s) => !s)} style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", cursor: processo.senha && processo.senha !== "-" ? "pointer" : "default", color: COLORS.ice, fontSize: 13, fontFamily: showSenha ? "'Inter', sans-serif" : "monospace" }}>
+                <button onClick={() => setShowSenha((s) => !s)} style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", cursor: processo.senha && processo.senha !== "-" ? "pointer" : "default", color: COLORS.ice, fontSize: 13, fontFamily: showSenha ? FONT_SANS : FONT_MONO }}>
                   {processo.senha && processo.senha !== "-" ? (showSenha ? processo.senha : "••••••••••") : "—"}
                   {processo.senha && processo.senha !== "-" && (showSenha ? <EyeOff size={14} color={COLORS.steel} /> : <Eye size={14} color={COLORS.steel} />)}
                 </button>
@@ -2267,7 +2414,7 @@ function ImportModal({ onClose, onImport }) {
     <div style={{ position: "fixed", inset: 0, background: "rgba(5,10,16,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 16 }} onClick={onClose}>
       <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.borderStrong}`, borderRadius: 12, width: "100%", maxWidth: 480, padding: 24 }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <h2 style={{ fontFamily: "'Oswald', sans-serif", fontSize: 18, color: COLORS.ice, fontWeight: 600, textTransform: "uppercase" }}>Importar planilha (CSV)</h2>
+          <h2 style={{ fontFamily: FONT_TITULO, fontSize: 18, color: COLORS.ice, fontWeight: 600, textTransform: "uppercase" }}>Importar planilha (CSV)</h2>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: COLORS.steel }}><X size={20} /></button>
         </div>
         <p style={{ fontSize: 12.5, color: COLORS.steel, lineHeight: 1.6, marginBottom: 16 }}>
@@ -2279,7 +2426,7 @@ function ImportModal({ onClose, onImport }) {
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
           <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${COLORS.border}`, color: COLORS.steelLight, borderRadius: 7, padding: "9px 16px", fontSize: 13, cursor: "pointer" }}>Cancelar</button>
           <button disabled={!status || !status.ok} onClick={() => { onImport(status.data); onClose(); }}
-            style={{ background: status && status.ok ? COLORS.red : COLORS.grayDim, border: "none", color: status && status.ok ? "#fff" : COLORS.steel, borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: status && status.ok ? "pointer" : "default", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.03em", textTransform: "uppercase" }}>
+            style={{ background: status && status.ok ? COLORS.red : COLORS.grayDim, border: "none", color: status && status.ok ? "#fff" : COLORS.steel, borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: status && status.ok ? "pointer" : "default", fontFamily: FONT_TITULO, letterSpacing: "0.03em", textTransform: "uppercase" }}>
             Confirmar importação
           </button>
         </div>
@@ -2325,7 +2472,7 @@ function AgendaItemModal({ dataInicial, onClose, onSave }) {
           if (!f.titulo.trim()) return;
           onSave({ id: `agenda-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, data: f.data, titulo: f.titulo.trim(), tipo: f.tipo, tecnico: f.tecnico, descricao: f.descricao.trim() });
           onClose();
-        }} style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.03em", textTransform: "uppercase" }}>
+        }} style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.03em", textTransform: "uppercase" }}>
           Salvar item
         </button>
       </div>
@@ -2467,7 +2614,7 @@ function AgendaSemanal({ processos, agendaItens, onOpenProcesso, onAddItem, onRe
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
               <div>
                 {modoView !== "mes" && <div style={{ fontSize: 10.5, color: iso === hojeIso ? COLORS.red : COLORS.steel, textTransform: "uppercase", fontWeight: 700, marginBottom: 2 }}>{nomesDia[diaDaSemanaIndex(data)]}</div>}
-                <div style={{ fontSize: modoView === "mes" ? 12 : 15, color: COLORS.ice, fontFamily: "'Oswald', sans-serif", fontWeight: 600, marginBottom: modoView === "mes" ? 2 : 6 }}>
+                <div style={{ fontSize: modoView === "mes" ? 12 : 15, color: COLORS.ice, fontFamily: FONT_TITULO, fontWeight: 600, marginBottom: modoView === "mes" ? 2 : 6 }}>
                   {String(data.getDate()).padStart(2, "0")}{modoView !== "mes" ? `/${String(data.getMonth() + 1).padStart(2, "0")}` : ""}
                 </div>
               </div>
@@ -2590,7 +2737,7 @@ function AtualizacoesPage({ processos, onOpenProcesso, codigosUnidade }) {
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <button onClick={() => imprimirStatusServicoGeral(processosFiltrados, filtroCliente.length === 1 ? filtroCliente[0] : null)}
-            style={{ display: "flex", alignItems: "center", gap: 6, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
+            style={{ display: "flex", alignItems: "center", gap: 6, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.02em", textTransform: "uppercase" }}>
             <Download size={13} /> Exportar para o cliente
           </button>
           <button onClick={exportarCSV} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${COLORS.border}`, color: COLORS.steelLight, borderRadius: 7, padding: "8px 14px", fontSize: 12.5, cursor: "pointer" }}>
@@ -2611,7 +2758,7 @@ function AtualizacoesPage({ processos, onOpenProcesso, codigosUnidade }) {
         {feed.length === 0 && <div style={{ padding: 30, textAlign: "center", color: COLORS.steel, fontSize: 13 }}>Nenhuma ocorrência encontrada com esses filtros.</div>}
         {paginado.map((a) => (
           <div key={a.id} className="row-hover" onClick={() => onOpenProcesso(a.processo)} style={{ display: "flex", gap: 14, padding: "12px 18px", borderBottom: `1px solid ${COLORS.border}`, cursor: "pointer" }}>
-            <div style={{ width: 78, flexShrink: 0, fontSize: 11.5, color: COLORS.steel, fontFamily: "monospace" }}>{fmtDate(a.data)}</div>
+            <div style={{ width: 78, flexShrink: 0, fontSize: 11.5, color: COLORS.steel, fontFamily: FONT_MONO }}>{fmtDate(a.data)}</div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 3 }}>
                 <span style={{ fontSize: 13, fontWeight: 600, color: COLORS.ice }}>{a.processo.cliente}</span>
@@ -2914,6 +3061,10 @@ const STATUS_CONTRATO_COLOR = {
 };
 function statusContratoStyle(s) { return STATUS_CONTRATO_COLOR[s] || { fg: COLORS.steelLight, bg: "rgba(255,255,255,0.06)" }; }
 
+/* Aplica as cores padrão já na abertura, antes de qualquer
+   configuração vinda do banco. */
+sincronizarCoresSemanticas();
+
 /* ============================================================
    PAGINAÇÃO — reutilizada em todas as listagens (clientes,
    unidades, contratos, processos, atualizações)
@@ -3032,7 +3183,7 @@ function ImportarClientesContratosPage({ onImport }) {
 
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 20 }}>
           <button disabled={!status || !status.ok} onClick={() => { onImport(status.data); setConfirmado(true); setStatus(null); }}
-            style={{ background: status && status.ok ? COLORS.red : COLORS.grayDim, border: "none", color: status && status.ok ? "#fff" : COLORS.steel, borderRadius: 7, padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: status && status.ok ? "pointer" : "default", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.03em", textTransform: "uppercase" }}>
+            style={{ background: status && status.ok ? COLORS.red : COLORS.grayDim, border: "none", color: status && status.ok ? "#fff" : COLORS.steel, borderRadius: 7, padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: status && status.ok ? "pointer" : "default", fontFamily: FONT_TITULO, letterSpacing: "0.03em", textTransform: "uppercase" }}>
             Confirmar importação
           </button>
         </div>
@@ -3100,7 +3251,7 @@ function NovoEventoModal({ onClose, onSave }) {
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
         <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${COLORS.border}`, color: COLORS.steelLight, borderRadius: 7, padding: "9px 16px", fontSize: 13, cursor: "pointer" }}>Cancelar</button>
         <button onClick={() => { if (!f.titulo.trim() || f.tecnicosObrigatorios.length === 0) return; onSave({ ...f, titulo: f.titulo.trim(), presencas: {} }); onClose(); }}
-          style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.03em", textTransform: "uppercase" }}>
+          style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.03em", textTransform: "uppercase" }}>
           Salvar evento
         </button>
       </div>
@@ -3123,7 +3274,7 @@ function TreinamentosPage({ eventos, onAddEvento, onExcluirEventos, edits, onEdi
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
         <BotaoSalvar pendentes={pendentesAqui} onSalvar={rascunho ? rascunho.salvarTudo : undefined} onDescartar={rascunho ? rascunho.descartarTudo : undefined} salvando={rascunho ? rascunho.salvando : false} compacto />
-        <button onClick={() => setShowNovo(true)} style={{ display: "flex", alignItems: "center", gap: 7, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
+        <button onClick={() => setShowNovo(true)} style={{ display: "flex", alignItems: "center", gap: 7, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.02em", textTransform: "uppercase" }}>
           <Plus size={15} /> Novo treinamento / comissão
         </button>
       </div>
@@ -3222,7 +3373,7 @@ function RankingTecnicosPage({ contratos, processos, eventos }) {
       <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap" }}>
         <div style={{ display: "flex", gap: 10 }}>
           <Select value={ano} onChange={setAno} options={anosDisponiveis} />
-          <select value={mes} onChange={(e) => setMes(e.target.value)} style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "8px 10px", color: COLORS.steelLight, fontSize: 12.5, fontFamily: "'Inter', sans-serif" }}>
+          <select value={mes} onChange={(e) => setMes(e.target.value)} style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "8px 10px", color: COLORS.steelLight, fontSize: 12.5, fontFamily: FONT_SANS }}>
             {MESES_NOMES.map((nome, i) => <option key={nome} value={String(i + 1)}>{nome}</option>)}
           </select>
         </div>
@@ -3230,7 +3381,7 @@ function RankingTecnicosPage({ contratos, processos, eventos }) {
           <button onClick={() => imprimirRanking(linhas, chaveMes)} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${COLORS.border}`, color: COLORS.steelLight, borderRadius: 7, padding: "9px 16px", fontSize: 12.5, cursor: "pointer" }}>
             <Download size={14} /> Exportar PDF
           </button>
-          <button onClick={exportarCSV} style={{ display: "flex", alignItems: "center", gap: 6, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
+          <button onClick={exportarCSV} style={{ display: "flex", alignItems: "center", gap: 6, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.02em", textTransform: "uppercase" }}>
             <Download size={14} /> Exportar CSV para o RH
           </button>
         </div>
@@ -3327,7 +3478,7 @@ function MetricasUsoPage() {
   return (
     <div>
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 20 }}>
-        <select value={periodo} onChange={(e) => setPeriodo(e.target.value)} style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "8px 10px", color: COLORS.steelLight, fontSize: 12.5, fontFamily: "'Inter', sans-serif" }}>
+        <select value={periodo} onChange={(e) => setPeriodo(e.target.value)} style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "8px 10px", color: COLORS.steelLight, fontSize: 12.5, fontFamily: FONT_SANS }}>
           <option value="7">Últimos 7 dias</option>
           <option value="30">Últimos 30 dias</option>
           <option value="90">Últimos 90 dias</option>
@@ -3430,7 +3581,7 @@ function GerenciarAcessosPage({ usuarioLogado, logoBase64, onLogoAtualizado }) {
           </ModalField>
         </div>
         {erro && <div style={{ fontSize: 12, color: COLORS.red, marginBottom: 10 }}>{erro}</div>}
-        <button onClick={criar} disabled={salvando} style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: salvando ? "default" : "pointer", opacity: salvando ? 0.7 : 1, fontFamily: "'Oswald', sans-serif", letterSpacing: "0.03em", textTransform: "uppercase" }}>
+        <button onClick={criar} disabled={salvando} style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: salvando ? "default" : "pointer", opacity: salvando ? 0.7 : 1, fontFamily: FONT_TITULO, letterSpacing: "0.03em", textTransform: "uppercase" }}>
           {salvando ? "Criando..." : "Criar acesso"}
         </button>
       </div>
@@ -3444,7 +3595,7 @@ function GerenciarAcessosPage({ usuarioLogado, logoBase64, onLogoAtualizado }) {
           <tbody>
             {usuarios.map((u) => (
               <tr key={u.id} style={{ borderBottom: `1px solid ${COLORS.border}` }}>
-                <td style={{ padding: "10px 18px", fontSize: 13, fontFamily: "monospace", color: COLORS.steelLight }}>{u.usuario}</td>
+                <td style={{ padding: "10px 18px", fontSize: 13, fontFamily: FONT_MONO, color: COLORS.steelLight }}>{u.usuario}</td>
                 <td style={{ padding: "10px 18px", fontSize: 13, color: COLORS.ice, fontWeight: 600 }}>{u.nome}</td>
                 <td style={{ padding: "10px 18px" }}><Pill fg={u.role === "admin" ? COLORS.red : COLORS.steelLight} bg={u.role === "admin" ? COLORS.redDim : "rgba(255,255,255,0.06)"}>{u.role === "admin" ? "Administrador" : "Operacional"}</Pill></td>
                 <td style={{ padding: "10px 18px", textAlign: "right" }}>
@@ -3493,7 +3644,7 @@ function ColorSwatchPicker({ value, onChange }) {
     <div ref={ref} style={{ position: "relative" }}>
       <button onClick={() => setOpen((o) => !o)} style={{ width: "100%", height: 36, border: `1px solid ${COLORS.border}`, borderRadius: 6, background: COLORS.panelAlt, cursor: "pointer", display: "flex", alignItems: "center", gap: 8, padding: "0 8px" }}>
         <span style={{ width: 18, height: 18, borderRadius: 3, background: value, border: "1px solid rgba(255,255,255,0.2)", flexShrink: 0 }} />
-        <span style={{ fontSize: 11, color: COLORS.steelLight, fontFamily: "monospace" }}>{value}</span>
+        <span style={{ fontSize: 11, color: COLORS.steelLight, fontFamily: FONT_MONO }}>{value}</span>
         <ChevronDown size={12} color={COLORS.steel} style={{ marginLeft: "auto" }} />
       </button>
       {open && (
@@ -3517,20 +3668,67 @@ function ColorSwatchPicker({ value, onChange }) {
   );
 }
 
+/* ============================================================
+   PERSONALIZAÇÃO — tudo o que a empresa pode mudar sem tocar no
+   código: logo (e o tamanho dele na tela e nos relatórios), nome,
+   cores da interface, cores dos gráficos e cores do menu lateral.
+   Nada é gravado antes do clique em "Salvar alterações".
+   ============================================================ */
+function ControleTamanho({ label, valor, onChange, min, max, ajuda }) {
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+        <label style={{ fontSize: 12, color: COLORS.steelLight, fontWeight: 600 }}>{label}</label>
+        <span style={{ fontSize: 12, color: COLORS.ice, fontFamily: FONT_MONO, fontWeight: 700 }}>{valor}px</span>
+      </div>
+      <input type="range" min={min} max={max} step={2} value={valor} onChange={(e) => onChange(Number(e.target.value))}
+        style={{ width: "100%", accentColor: COLORS.red, cursor: "pointer" }} />
+      {ajuda && <div style={{ fontSize: 11, color: COLORS.steel, marginTop: 4 }}>{ajuda}</div>}
+    </div>
+  );
+}
+
 function PersonalizacaoSection({ logoBase64, onLogoAtualizado }) {
   const [corPrimaria, setCorPrimaria] = useState(COLORS.red);
   const [corFundo, setCorFundo] = useState(COLORS.bg);
   const [corPainel, setCorPainel] = useState(COLORS.panel);
   const [nomeEmpresa, setNomeEmpresa] = useState(NOME_RESPONSAVEL);
+  const [alturaTela, setAlturaTela] = useState(LOGO_ALTURA_TELA);
+  const [alturaRelatorio, setAlturaRelatorio] = useState(LOGO_ALTURA_RELATORIO);
+  const [gConcluido, setGConcluido] = useState(CHART.concluido);
+  const [gAndamento, setGAndamento] = useState(CHART.andamento);
+  const [gPendente, setGPendente] = useState(CHART.pendente);
+  const [gSuspenso, setGSuspenso] = useState(CHART.suspenso);
+  const [gDestaque, setGDestaque] = useState(CHART.destaque);
+  const [mFundo, setMFundo] = useState(MENU.fundo);
+  const [mTexto, setMTexto] = useState(MENU.texto);
+  const [mAtivo, setMAtivo] = useState(MENU.ativo);
+  const [mTitulo, setMTitulo] = useState(MENU.titulo);
   const [salvandoLogo, setSalvandoLogo] = useState(false);
-  const [salvandoCores, setSalvandoCores] = useState(false);
-  const [salvandoNome, setSalvandoNome] = useState(false);
+  const [salvando, setSalvando] = useState(false);
   const [msg, setMsg] = useState("");
+
+  const originais = useRef({
+    nome: NOME_RESPONSAVEL, primaria: COLORS.red, fundo: COLORS.bg, painel: COLORS.panel,
+    alturaTela: LOGO_ALTURA_TELA, alturaRelatorio: LOGO_ALTURA_RELATORIO,
+    gConcluido: CHART.concluido, gAndamento: CHART.andamento, gPendente: CHART.pendente,
+    gSuspenso: CHART.suspenso, gDestaque: CHART.destaque,
+    mFundo: MENU.fundo, mTexto: MENU.texto, mAtivo: MENU.ativo, mTitulo: MENU.titulo,
+  });
+
+  const atuais = {
+    nome: nomeEmpresa.trim(), primaria: corPrimaria, fundo: corFundo, painel: corPainel,
+    alturaTela, alturaRelatorio,
+    gConcluido, gAndamento, gPendente, gSuspenso, gDestaque,
+    mFundo, mTexto, mAtivo, mTitulo,
+  };
+  const pendentes = Object.keys(atuais).filter((k) => atuais[k] !== originais.current[k]).length;
+  const mudou = (k) => atuais[k] !== originais.current[k];
 
   const enviarLogo = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    if (!["image/jpeg", "image/jpg", "image/gif", "image/png"].includes(file.type)) { setMsg("Envie um arquivo JPEG, JPG ou GIF."); return; }
+    if (!["image/jpeg", "image/jpg", "image/gif", "image/png"].includes(file.type)) { setMsg("Envie um arquivo JPEG, JPG, PNG ou GIF."); return; }
     setSalvandoLogo(true);
     const reader = new FileReader();
     reader.onload = async (ev) => {
@@ -3539,7 +3737,7 @@ function PersonalizacaoSection({ logoBase64, onLogoAtualizado }) {
       setSalvandoLogo(false);
       if (error) { setMsg("Erro ao salvar o logo: " + error.message); return; }
       onLogoAtualizado(base64);
-      setMsg("Logo atualizado.");
+      setMsg("Logo atualizado. Ajuste o tamanho nos controles abaixo e clique em Salvar alterações.");
     };
     reader.readAsDataURL(file);
   };
@@ -3549,88 +3747,157 @@ function PersonalizacaoSection({ logoBase64, onLogoAtualizado }) {
     setSalvandoLogo(false);
     if (!error) { onLogoAtualizado(null); setMsg("Logo removido."); }
   };
-  /* Nome e cores ficam como rascunho até o clique em "Salvar alterações". */
-  const originais = useRef({ nome: NOME_RESPONSAVEL, primaria: COLORS.red, fundo: COLORS.bg, painel: COLORS.panel });
-  const pendentes =
-    (nomeEmpresa.trim() !== originais.current.nome ? 1 : 0) +
-    (corPrimaria !== originais.current.primaria ? 1 : 0) +
-    (corFundo !== originais.current.fundo ? 1 : 0) +
-    (corPainel !== originais.current.painel ? 1 : 0);
 
   const descartar = () => {
-    setNomeEmpresa(originais.current.nome);
-    setCorPrimaria(originais.current.primaria);
-    setCorFundo(originais.current.fundo);
-    setCorPainel(originais.current.painel);
+    const o = originais.current;
+    setNomeEmpresa(o.nome); setCorPrimaria(o.primaria); setCorFundo(o.fundo); setCorPainel(o.painel);
+    setAlturaTela(o.alturaTela); setAlturaRelatorio(o.alturaRelatorio);
+    setGConcluido(o.gConcluido); setGAndamento(o.gAndamento); setGPendente(o.gPendente);
+    setGSuspenso(o.gSuspenso); setGDestaque(o.gDestaque);
+    setMFundo(o.mFundo); setMTexto(o.mTexto); setMAtivo(o.mAtivo); setMTitulo(o.mTitulo);
     setMsg("");
   };
 
   const salvarTudo = async () => {
     const valor = nomeEmpresa.trim() || "Primers";
-    setSalvandoNome(true); setSalvandoCores(true);
-    const { error } = await supabase.from("configuracoes")
-      .update({ nome_empresa: valor, cor_primaria: corPrimaria, cor_fundo: corFundo, cor_painel: corPainel })
-      .eq("id", 1);
-    setSalvandoNome(false); setSalvandoCores(false);
-    if (error) { setMsg("Erro ao salvar: " + error.message); return; }
-    NOME_RESPONSAVEL = valor;
-    aplicarTema({ cor_primaria: corPrimaria, cor_fundo: corFundo, cor_painel: corPainel });
-    originais.current = { nome: valor, primaria: corPrimaria, fundo: corFundo, painel: corPainel };
-    setMsg("Alterações salvas — recarregue a página (F5) para ver aplicado em 100% do sistema.");
+    setSalvando(true);
+    const linha = {
+      nome_empresa: valor,
+      cor_primaria: corPrimaria, cor_fundo: corFundo, cor_painel: corPainel,
+      logo_altura_tela: alturaTela, logo_altura_relatorio: alturaRelatorio,
+      cor_grafico_concluido: gConcluido, cor_grafico_andamento: gAndamento,
+      cor_grafico_pendente: gPendente, cor_grafico_suspenso: gSuspenso, cor_grafico_destaque: gDestaque,
+      cor_menu_fundo: mFundo, cor_menu_texto: mTexto, cor_menu_ativo: mAtivo, cor_menu_titulo: mTitulo,
+    };
+    const { error } = await supabase.from("configuracoes").update(linha).eq("id", 1);
+    setSalvando(false);
+    if (error) { setMsg("Erro ao salvar: " + error.message + " — se a mensagem citar uma coluna que não existe, rode o supabase_schema.sql atualizado no SQL Editor."); return; }
+    aplicarTema({ ...linha, logo_base64: LOGO_BASE64 });
+    originais.current = { ...atuais, nome: valor };
+    setMsg("Alterações salvas. Recarregue a página (F5) para ver aplicado em 100% do sistema.");
   };
 
+  const rotuloSecao = { fontSize: 11.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 700, marginBottom: 12, marginTop: 26 };
+  const campoCor = (label, valorCor, setter, chave) => (
+    <div>
+      <div style={{ fontSize: 11, color: mudou(chave) ? COLORS.orange : COLORS.steel, marginBottom: 5, fontWeight: 600 }}>{label}</div>
+      <ColorSwatchPicker value={valorCor} onChange={setter} />
+    </div>
+  );
+
   return (
-    <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 20, marginBottom: 20, maxWidth: 560 }}>
-      <div style={{ fontSize: 11.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 700, marginBottom: 14 }}>Personalização — logo, nome e cores</div>
+    <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: 22, marginBottom: 20, maxWidth: 720 }}>
+      <div style={{ fontSize: 11.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 700 }}>Personalização</div>
+      <div style={{ fontSize: 11.5, color: COLORS.steel, marginTop: 4 }}>Logo, nome, cores da interface, cores dos gráficos e cores do menu lateral.</div>
 
-      <div style={{ marginBottom: 22 }}>
-        <div style={{ fontSize: 12, color: COLORS.steelLight, marginBottom: 8 }}>Logo do sistema (JPEG, JPG ou GIF)</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div style={{ width: 90, height: 60, background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0 }}>
-            {logoBase64 ? <img src={logoBase64} alt="Logo atual" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} /> : <span style={{ fontSize: 10, color: COLORS.steel }}>Sem logo</span>}
+      {/* ---------- LOGO ---------- */}
+      <div style={rotuloSecao}>Logo</div>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
+        <div style={{ width: 150, minHeight: 90, background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0, padding: 8 }}>
+          {logoBase64
+            ? <img src={logoBase64} alt="Logo atual" style={{ maxHeight: alturaTela, maxWidth: "100%", objectFit: "contain" }} />
+            : <span style={{ fontSize: 10.5, color: COLORS.steel }}>Sem logo</span>}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 6, background: COLORS.red, color: "#fff", borderRadius: 7, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.02em", textTransform: "uppercase", width: "fit-content" }}>
+            <Upload size={13} /> {salvandoLogo ? "Enviando..." : "Enviar logo"}
+            <input type="file" accept="image/jpeg,image/jpg,image/gif,image/png" onChange={enviarLogo} disabled={salvandoLogo} style={{ display: "none" }} />
+          </label>
+          {logoBase64 && <button onClick={removerLogo} disabled={salvandoLogo} style={{ background: "transparent", border: `1px solid ${COLORS.red}55`, color: COLORS.red, borderRadius: 6, padding: "6px 12px", fontSize: 11.5, cursor: "pointer", width: "fit-content" }}>Remover logo</button>}
+          <div style={{ fontSize: 11, color: COLORS.steel, maxWidth: 300, lineHeight: 1.5 }}>
+            JPEG, JPG, PNG ou GIF. O envio e a remoção do arquivo são imediatos; o tamanho é que entra no rascunho.
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 6, background: COLORS.red, color: "#fff", borderRadius: 7, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase", width: "fit-content" }}>
-              <Upload size={13} /> {salvandoLogo ? "Enviando..." : "Enviar logo"}
-              <input type="file" accept="image/jpeg,image/jpg,image/gif,image/png" onChange={enviarLogo} disabled={salvandoLogo} style={{ display: "none" }} />
-            </label>
-            {logoBase64 && <button onClick={removerLogo} disabled={salvandoLogo} style={{ background: "transparent", border: `1px solid ${COLORS.red}55`, color: COLORS.red, borderRadius: 6, padding: "6px 12px", fontSize: 11.5, cursor: "pointer" }}>Remover logo</button>}
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 22, marginTop: 18 }}>
+        <ControleTamanho label="Tamanho na tela" valor={alturaTela} onChange={setAlturaTela} min={40} max={200}
+          ajuda="Menu lateral e tela de login. O quadro acima mostra o tamanho real." />
+        <div>
+          <ControleTamanho label="Tamanho nos relatórios" valor={alturaRelatorio} onChange={setAlturaRelatorio} min={24} max={140}
+            ajuda="Cabeçalho dos PDFs exportados (Status de Serviço, Linha do tempo, Ranking)." />
+          <div style={{ background: "#fff", borderRadius: 6, padding: 8, display: "flex", alignItems: "center", justifyContent: "center", minHeight: 50 }}>
+            {logoBase64
+              ? <img src={logoBase64} alt="Prévia no relatório" style={{ maxHeight: alturaRelatorio, maxWidth: "100%", objectFit: "contain" }} />
+              : <span style={{ fontSize: 10.5, color: "#8493a6" }}>Prévia do cabeçalho impresso</span>}
           </div>
         </div>
       </div>
 
-      <div style={{ marginBottom: 22 }}>
-        <div style={{ fontSize: 12, color: COLORS.steelLight, marginBottom: 8 }}>Nome da empresa / responsável</div>
-        <div style={{ fontSize: 11, color: COLORS.steel, marginBottom: 8, lineHeight: 1.5 }}>
-          Usado em todo o sistema onde antes aparecia "Primers" — como rótulo de responsabilidade nos status, filtros, dashboards e documentos exportados. Não tem relação com o título fixo "CONTROLE DE PROCESSOS E SERVIÇOS" do menu.
-        </div>
-        <input value={nomeEmpresa} onChange={(e) => setNomeEmpresa(e.target.value)} placeholder="Ex: Sua Empresa, Grupo XYZ..."
-          style={{ width: "100%", background: COLORS.panelAlt, border: `1px solid ${nomeEmpresa.trim() !== originais.current.nome ? COLORS.orange + "99" : COLORS.border}`, borderRadius: 6, padding: "8px 10px", color: COLORS.ice, fontSize: 12.5 }} />
+      {/* ---------- NOME ---------- */}
+      <div style={rotuloSecao}>Nome da empresa / responsável</div>
+      <div style={{ fontSize: 11, color: COLORS.steel, marginBottom: 8, lineHeight: 1.5 }}>
+        Usado como rótulo de responsabilidade nos status, filtros, dashboards e documentos exportados.
+      </div>
+      <input value={nomeEmpresa} onChange={(e) => setNomeEmpresa(e.target.value)} placeholder="Ex: Sua Empresa, Grupo XYZ..."
+        style={{ width: "100%", background: COLORS.panelAlt, border: `1px solid ${mudou("nome") ? COLORS.orange + "99" : COLORS.border}`, borderRadius: 6, padding: "9px 11px", color: COLORS.ice, fontSize: 12.5, fontFamily: FONT_SANS }} />
+
+      {/* ---------- CORES DA INTERFACE ---------- */}
+      <div style={rotuloSecao}>Cores da interface</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+        {campoCor("Cor de destaque", corPrimaria, setCorPrimaria, "primaria")}
+        {campoCor("Cor de fundo", corFundo, setCorFundo, "fundo")}
+        {campoCor("Cor dos painéis", corPainel, setCorPainel, "painel")}
       </div>
 
-      <div>
-        <div style={{ fontSize: 12, color: COLORS.steelLight, marginBottom: 8 }}>Cores da interface (até 3 cores)</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
-          <ModalField label="Cor de destaque">
-            <ColorSwatchPicker value={corPrimaria} onChange={setCorPrimaria} />
-          </ModalField>
-          <ModalField label="Cor de fundo">
-            <ColorSwatchPicker value={corFundo} onChange={setCorFundo} />
-          </ModalField>
-          <ModalField label="Cor dos painéis">
-            <ColorSwatchPicker value={corPainel} onChange={setCorPainel} />
-          </ModalField>
+      {/* ---------- CORES DOS GRÁFICOS ---------- */}
+      <div style={rotuloSecao}>Cores dos gráficos</div>
+      <div style={{ fontSize: 11, color: COLORS.steel, marginBottom: 12, lineHeight: 1.5 }}>
+        Cada cor tem um significado e vale nos gráficos <b style={{ color: COLORS.steelLight }}>e</b> nas etiquetas de status das tabelas,
+        para o sistema inteiro falar a mesma língua.
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+        {campoCor(CHART_LABELS.concluido, gConcluido, setGConcluido, "gConcluido")}
+        {campoCor(CHART_LABELS.andamento, gAndamento, setGAndamento, "gAndamento")}
+        {campoCor(CHART_LABELS.pendente, gPendente, setGPendente, "gPendente")}
+        {campoCor(CHART_LABELS.suspenso, gSuspenso, setGSuspenso, "gSuspenso")}
+        {campoCor(CHART_LABELS.destaque, gDestaque, setGDestaque, "gDestaque")}
+      </div>
+      <div style={{ marginTop: 14, background: COLORS.panelAlt, borderRadius: 8, padding: 14 }}>
+        <div style={{ fontSize: 10.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 10 }}>Prévia</div>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 10, height: 76 }}>
+          {[["Concluído", gConcluido, 76], ["Em andamento", gAndamento, 56], ["Pendente", gPendente, 40], ["Suspenso", gSuspenso, 28], ["Meta", gDestaque, 66]].map(([nome, cor, h]) => (
+            <div key={nome} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+              <div style={{ width: "100%", height: h, background: cor, borderRadius: "5px 5px 0 0" }} />
+            </div>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12 }}>
+          {[["Concluído", gConcluido], ["Em andamento", gAndamento], ["Pendente", gPendente], ["Suspenso", gSuspenso], ["Meta", gDestaque]].map(([nome, cor]) => (
+            <span key={nome} style={{ fontSize: 10.5, fontWeight: 700, color: cor, background: hexParaRgba(cor, 0.15), borderRadius: 999, padding: "3px 10px" }}>{nome}</span>
+          ))}
         </div>
       </div>
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginTop: 20, paddingTop: 16, borderTop: `1px solid ${COLORS.border}`, flexWrap: "wrap" }}>
+      {/* ---------- CORES DO MENU ---------- */}
+      <div style={rotuloSecao}>Cores do menu lateral</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignContent: "start" }}>
+          {campoCor("Fundo do menu", mFundo, setMFundo, "mFundo")}
+          {campoCor("Texto dos itens", mTexto, setMTexto, "mTexto")}
+          {campoCor("Item selecionado", mAtivo, setMAtivo, "mAtivo")}
+          {campoCor("Nome do sistema", mTitulo, setMTitulo, "mTitulo")}
+        </div>
+        <div style={{ background: mFundo, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 14 }}>
+          <div style={{ fontSize: 10.5, color: mTitulo, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.01em", marginBottom: 12, fontFamily: FONT_TITULO }}>Controle de Processos e Serviços</div>
+          {["Clientes", "Dashboard", "Controle de Processos e Serviços", "Relatório de Status"].map((item, i) => (
+            <div key={item} style={{
+              padding: "7px 9px", borderRadius: 6, fontSize: 12, marginBottom: 3,
+              background: i === 2 ? hexParaRgba(mAtivo, 0.16) : "transparent",
+              color: i === 2 ? mAtivo : mTexto, fontWeight: i === 2 ? 700 : 500,
+            }}>{item}</div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginTop: 24, paddingTop: 16, borderTop: `1px solid ${COLORS.border}`, flexWrap: "wrap" }}>
         <div style={{ fontSize: 12, color: pendentes > 0 ? COLORS.orange : COLORS.steel }}>
           {pendentes > 0 ? `${pendentes} alteração(ões) ainda não salva(s)` : "Sem alterações pendentes"}
         </div>
-        <BotaoSalvar pendentes={pendentes} onSalvar={salvarTudo} onDescartar={descartar} salvando={salvandoNome || salvandoCores} compacto />
+        <BotaoSalvar pendentes={pendentes} onSalvar={salvarTudo} onDescartar={descartar} salvando={salvando} compacto />
       </div>
 
-      {msg && <div style={{ marginTop: 12, fontSize: 12, color: COLORS.steelLight }}>{msg}</div>}
+      {msg && <div style={{ marginTop: 12, fontSize: 12, color: COLORS.steelLight, lineHeight: 1.5 }}>{msg}</div>}
     </div>
   );
 }
@@ -3660,12 +3927,12 @@ function LoginScreen({ onLogin, logoBase64 }) {
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: COLORS.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Inter', sans-serif", padding: 16 }}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap'); * { box-sizing: border-box; } ::placeholder { color: ${COLORS.steel}; opacity: 0.7; }`}</style>
+    <div style={{ minHeight: "100vh", background: COLORS.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: FONT_SANS, padding: 16 }}>
+      <style>{`@import url('${FONTES_GOOGLE}'); * { box-sizing: border-box; } ::placeholder { color: ${COLORS.steel}; opacity: 0.7; }`}</style>
       <div style={{ width: "100%", maxWidth: 360, background: COLORS.panel, border: `1px solid ${COLORS.borderStrong}`, borderRadius: 12, padding: 32 }}>
         <div style={{ textAlign: "center", marginBottom: 24 }}>
-          {logoBase64 && <img src={logoBase64} alt="Logo" style={{ maxHeight: 100, maxWidth: 230, objectFit: "contain", marginBottom: 10 }} />}
-          <div style={{ fontFamily: "'Oswald', sans-serif", fontWeight: 700, fontSize: 18, color: COLORS.ice, letterSpacing: "0.02em", textTransform: "uppercase" }}>Controle de Processos e Serviços</div>
+          {logoBase64 && <img src={logoBase64} alt="Logo" style={{ maxHeight: Math.round(LOGO_ALTURA_TELA * 1.25), maxWidth: "100%", objectFit: "contain", marginBottom: 12 }} />}
+          <div style={{ fontFamily: FONT_TITULO, fontWeight: 700, fontSize: 18, color: COLORS.ice, letterSpacing: "0.02em", textTransform: "uppercase" }}>Controle de Processos e Serviços</div>
           <div style={{ fontSize: 10.5, color: COLORS.steel, letterSpacing: "0.06em", marginTop: 4 }}>Acesso restrito</div>
         </div>
 
@@ -3684,7 +3951,7 @@ function LoginScreen({ onLogin, logoBase64 }) {
 
           </ModalField>
           {erro && <div style={{ fontSize: 12, color: COLORS.red }}>{erro}</div>}
-          <button onClick={entrar} disabled={carregando} style={{ marginTop: 6, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "11px 18px", fontSize: 13, fontWeight: 700, cursor: carregando ? "default" : "pointer", opacity: carregando ? 0.7 : 1, fontFamily: "'Oswald', sans-serif", letterSpacing: "0.03em", textTransform: "uppercase" }}>
+          <button onClick={entrar} disabled={carregando} style={{ marginTop: 6, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "11px 18px", fontSize: 13, fontWeight: 700, cursor: carregando ? "default" : "pointer", opacity: carregando ? 0.7 : 1, fontFamily: FONT_TITULO, letterSpacing: "0.03em", textTransform: "uppercase" }}>
             {carregando ? "Entrando..." : "Entrar"}
           </button>
         </div>
@@ -3707,7 +3974,7 @@ function ModalShell({ title, onClose, onBack, maxWidth = 460, children }) {
                 <ChevronLeft size={15} color={COLORS.steelLight} />
               </button>
             )}
-            <h2 style={{ fontFamily: "'Oswald', sans-serif", fontSize: 18, fontWeight: 600, color: COLORS.ice, textTransform: "uppercase", letterSpacing: "0.03em" }}>{title}</h2>
+            <h2 style={{ fontFamily: FONT_TITULO, fontSize: 18, fontWeight: 600, color: COLORS.ice, textTransform: "uppercase", letterSpacing: "0.03em" }}>{title}</h2>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: COLORS.steel }}><X size={20} /></button>
         </div>
@@ -3724,7 +3991,7 @@ function ModalField({ label, children }) {
     </div>
   );
 }
-const modalInputStyle = { background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "8px 10px", color: COLORS.ice, fontSize: 13, fontFamily: "'Inter', sans-serif", outline: "none", width: "100%" };
+const modalInputStyle = { background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "8px 10px", color: COLORS.ice, fontSize: 13, fontFamily: FONT_SANS, outline: "none", width: "100%" };
 
 function NovoClienteModal({ onClose, onSave }) {
   const [cliente, setCliente] = useState("");
@@ -3739,7 +4006,7 @@ function NovoClienteModal({ onClose, onSave }) {
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
         <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${COLORS.border}`, color: COLORS.steelLight, borderRadius: 7, padding: "9px 16px", fontSize: 13, cursor: "pointer" }}>Cancelar</button>
         <button onClick={() => { if (!cliente.trim()) return; onSave(novaLinhaContrato({ cliente: cliente.trim(), servico: "Cadastro manual (sem contrato ainda)", statusContrato: "-", statusServico: "-", statusParcela: "Pendente" })); onClose(); }}
-          style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.03em", textTransform: "uppercase" }}>
+          style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.03em", textTransform: "uppercase" }}>
           Salvar cliente
         </button>
       </div>
@@ -3764,7 +4031,7 @@ function NovaUnidadeModal({ onClose, onSave, clientesExistentes }) {
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
         <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${COLORS.border}`, color: COLORS.steelLight, borderRadius: 7, padding: "9px 16px", fontSize: 13, cursor: "pointer" }}>Cancelar</button>
         <button onClick={() => { if (!cliente.trim() || !unidade.trim()) return; onSave(novaLinhaContrato({ cliente: cliente.trim(), unidade: unidade.trim(), servico: "Cadastro manual (sem contrato ainda)", statusContrato: "-", statusServico: "-", statusParcela: "Pendente" })); onClose(); }}
-          style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.03em", textTransform: "uppercase" }}>
+          style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.03em", textTransform: "uppercase" }}>
           Salvar unidade
         </button>
       </div>
@@ -3805,7 +4072,7 @@ function BarraSelecaoExclusao({ contagem, onLimpar, onExcluir, rotulo }) {
     <div style={{ display: "flex", alignItems: "center", gap: 12, background: COLORS.redDim, border: `1px solid ${COLORS.red}55`, borderRadius: 8, padding: "9px 14px", marginBottom: 14 }}>
       <span style={{ fontSize: 12.5, color: COLORS.ice, fontWeight: 600 }}>{contagem} {rotulo || "item(ns)"} selecionado(s)</span>
       <button onClick={onLimpar} style={{ background: "transparent", border: "none", color: COLORS.steelLight, fontSize: 12, cursor: "pointer", textDecoration: "underline" }}>Limpar seleção</button>
-      <button onClick={onExcluir} style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, background: COLORS.red, border: "none", color: "#fff", borderRadius: 6, padding: "7px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
+      <button onClick={onExcluir} style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, background: COLORS.red, border: "none", color: "#fff", borderRadius: 6, padding: "7px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.02em", textTransform: "uppercase" }}>
         <Trash2 size={13} /> Excluir selecionados
       </button>
     </div>
@@ -3869,7 +4136,7 @@ function CampoRascunho({ tipo, valor, opcoes, onChange, corTexto, largura, place
     border: `1px solid ${pendente ? COLORS.orange + "99" : COLORS.border}`,
     borderRadius: 6, padding: "6px 8px", color: corTexto || COLORS.ice, fontSize: 12,
     width: typeof largura === "number" ? largura : (largura || "100%"),
-    fontFamily: "'Inter', sans-serif", outline: "none",
+    fontFamily: FONT_SANS, outline: "none",
   };
   if (tipo === "select") {
     return (
@@ -3958,7 +4225,7 @@ function ContratoFormModal({ title, submitLabel, initial, onClose, onSubmit, cli
             statusParcela: f.statusParcela, observacao: f.observacao.trim(),
           });
           onClose();
-        }} style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.03em", textTransform: "uppercase" }}>
+        }} style={{ background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.03em", textTransform: "uppercase" }}>
           {submitLabel}
         </button>
       </div>
@@ -3987,7 +4254,7 @@ function ClienteUnidadesModal({ cliente, contratos, idsUnidades, onClose, onOpen
           style={{ cursor: "pointer", padding: "12px 14px", border: `1px solid ${COLORS.border}`, borderRadius: 8, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.ice }}>{u.unidade}</div>
-            <div style={{ fontSize: 10.5, color: COLORS.steel, fontFamily: "monospace", marginTop: 2 }}>{idsUnidades[`${cliente}|${u.unidade}`]}</div>
+            <div style={{ fontSize: 10.5, color: COLORS.steel, fontFamily: FONT_MONO, marginTop: 2 }}>{idsUnidades[`${cliente}|${u.unidade}`]}</div>
           </div>
           <div style={{ fontSize: 11.5, color: COLORS.steelLight, whiteSpace: "nowrap" }}>{u.propostas.size} contrato(s) · {u.servicos.size} serviço(s)</div>
           <ChevronRight size={16} color={COLORS.steel} style={{ flexShrink: 0 }} />
@@ -4017,7 +4284,7 @@ function UnidadeContratosModal({ cliente, unidade, contratos, onClose, onBack, o
           <div key={p.proposta} className="row-hover" onClick={() => onOpenContrato(p.proposta)}
             style={{ cursor: "pointer", padding: "12px 14px", border: `1px solid ${COLORS.border}`, borderRadius: 8, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
             <div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.ice, fontFamily: "monospace" }}>{p.proposta}</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.ice, fontFamily: FONT_MONO }}>{p.proposta}</div>
               <div style={{ fontSize: 11.5, color: COLORS.steel, marginTop: 3 }}>{p.servicos.size} serviço(s)</div>
             </div>
             <Pill fg={sc.fg} bg={sc.bg}>{p.statusContrato}</Pill>
@@ -4175,7 +4442,7 @@ function ContratoDetalheCompletoModal({ proposta, cliente, unidade, contratos, p
           <div style={{ fontSize: 11, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em" }}>{cliente} · {rotuloUnidade(unidade, codigoUnidade)}</div>
           <div style={{ fontSize: 12.5, color: COLORS.steelLight, marginTop: 3 }}>Serviços: <b style={{ color: COLORS.ice }}>{totalServicos}</b> · Tarefas: <b style={{ color: COLORS.ice }}>{totalTarefas}</b> · Concluídas: <b style={{ color: COLORS.green }}>{tarefasConcluidas}</b></div>
         </div>
-        <button onClick={() => setShowAdicionarServico(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
+        <button onClick={() => setShowAdicionarServico(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.02em", textTransform: "uppercase" }}>
           <Plus size={13} /> Adicionar serviço
         </button>
       </div>
@@ -4268,7 +4535,7 @@ function ContratoDetalheCompletoModal({ proposta, cliente, unidade, contratos, p
           {pendentesAqui > 0 ? `${pendentesAqui} alteração(ões) ainda não salva(s)` : "Sem alterações pendentes"}
         </div>
         <div style={{ fontSize: 13, color: COLORS.steelLight }}>
-          Total do contrato: <b style={{ color: COLORS.ice, fontFamily: "'Oswald', sans-serif", fontSize: 16 }}>{totalServicos} serviço(s)</b> · <b style={{ color: COLORS.ice, fontFamily: "'Oswald', sans-serif", fontSize: 16 }}>{totalTarefas} tarefa(s)</b>
+          Total do contrato: <b style={{ color: COLORS.ice, fontFamily: FONT_TITULO, fontSize: 16 }}>{totalServicos} serviço(s)</b> · <b style={{ color: COLORS.ice, fontFamily: FONT_TITULO, fontSize: 16 }}>{totalTarefas} tarefa(s)</b>
         </div>
       </div>
       <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>
@@ -4355,7 +4622,7 @@ function ClientesPage({ contratos, onAddContrato, isAdmin, onOpenCliente, onExcl
           <BotaoFiltroPopup grupos={[{ label: "Status do contrato", options: statusOpcoes, selected: filtroStatus, onApply: (v) => { setFiltroStatus(v); setPage(1); } }]} />
         </div>
         {isAdmin && (
-          <button onClick={() => setShowNovo(true)} style={{ display: "flex", alignItems: "center", gap: 7, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
+          <button onClick={() => setShowNovo(true)} style={{ display: "flex", alignItems: "center", gap: 7, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.02em", textTransform: "uppercase" }}>
             <Plus size={15} /> Novo cliente
           </button>
         )}
@@ -4376,7 +4643,7 @@ function ClientesPage({ contratos, onAddContrato, isAdmin, onOpenCliente, onExcl
               {paginados.map((c) => (
                 <tr key={c.cliente} className="row-hover" style={{ borderBottom: `1px solid ${COLORS.border}`, cursor: "pointer" }} onClick={() => onOpenCliente(c.cliente)}>
                   {isAdmin && <td style={{ padding: "11px 16px" }} onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selecionados.has(c.cliente)} onChange={() => toggleSel(c.cliente)} /></td>}
-                  <td style={{ padding: "11px 16px", fontSize: 11, color: COLORS.steel, fontFamily: "monospace" }}>{idsClientes[c.cliente]}</td>
+                  <td style={{ padding: "11px 16px", fontSize: 11, color: COLORS.steel, fontFamily: FONT_MONO }}>{idsClientes[c.cliente]}</td>
                   <td style={{ padding: "11px 16px", fontSize: 13, fontWeight: 600, color: COLORS.ice, display: "flex", alignItems: "center", gap: 6 }}><Building2 size={12} color={COLORS.steel} />{c.cliente}</td>
                   <td style={{ padding: "11px 16px", fontSize: 13, color: COLORS.steelLight }}>{c.unidades}</td>
                   <td style={{ padding: "11px 16px", fontSize: 13, color: COLORS.steelLight }}>{c.propostas}</td>
@@ -4459,7 +4726,7 @@ function UnidadesPage({ contratos, onAddContrato, onOpenUnidade, isAdmin, onExcl
           </div>
           <BotaoFiltroPopup grupos={[{ label: "Status do contrato", options: statusOpcoes, selected: filtroStatus, onApply: (v) => { setFiltroStatus(v); setPage(1); } }]} />
         </div>
-        <button onClick={() => setShowNovo(true)} style={{ display: "flex", alignItems: "center", gap: 7, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
+        <button onClick={() => setShowNovo(true)} style={{ display: "flex", alignItems: "center", gap: 7, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.02em", textTransform: "uppercase" }}>
           <Plus size={15} /> Nova unidade
         </button>
       </div>
@@ -4483,9 +4750,9 @@ function UnidadesPage({ contratos, onAddContrato, onOpenUnidade, isAdmin, onExcl
                 return (
                   <tr key={i} className="row-hover" style={{ borderBottom: `1px solid ${COLORS.border}`, cursor: "pointer" }} onClick={() => onOpenUnidade(u.cliente, u.unidade)}>
                     {isAdmin && <td style={{ padding: "11px 16px" }} onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selecionados.has(chave(u))} onChange={() => toggleSel(chave(u))} /></td>}
-                    <td style={{ padding: "11px 16px", fontSize: 11, color: COLORS.steel, fontFamily: "monospace" }}>{idsUnidades[`${u.cliente}|${u.unidade}`]}</td>
+                    <td style={{ padding: "11px 16px", fontSize: 11, color: COLORS.steel, fontFamily: FONT_MONO }}>{idsUnidades[`${u.cliente}|${u.unidade}`]}</td>
                     <td style={{ padding: "11px 16px", fontSize: 13, fontWeight: 600, color: COLORS.ice }}>{u.cliente}</td>
-                    <td style={{ padding: "11px 16px", fontSize: 12.5, color: COLORS.steel, fontFamily: "monospace" }}>{u.codigoUnidade || "—"}</td>
+                    <td style={{ padding: "11px 16px", fontSize: 12.5, color: COLORS.steel, fontFamily: FONT_MONO }}>{u.codigoUnidade || "—"}</td>
                     <td style={{ padding: "11px 16px", fontSize: 13, color: COLORS.steelLight }}>{u.unidade}</td>
                     <td style={{ padding: "11px 16px", fontSize: 13, color: COLORS.steelLight }}>{u.servicos}</td>
                     <td style={{ padding: "11px 16px" }}><Pill fg={sc.fg} bg={sc.bg}>{u.statusContrato}</Pill></td>
@@ -4570,11 +4837,12 @@ function PlanejamentoServicosPage({ contratos, onOpenContrato }) {
 
   const chartDataAno = useMemo(() => {
     const map = {};
-    for (let m = 1; m <= 12; m++) map[m] = { label: MESES_ABREV[m - 1], "Pendente": 0, "Em andamento": 0, "Concluído": 0, "Suspenso": 0 };
+    for (let m = 1; m <= 12; m++) map[m] = { label: MESES_ABREV[m - 1], "Pendente": 0, "Em andamento": 0, "Concluído": 0, "Suspenso": 0, total: 0 };
     doAno.forEach((c) => {
       const m = parseInt(c.dataSLA.slice(5, 7), 10);
       if (!map[m]) return;
       map[m][c.statusParcela] = (map[m][c.statusParcela] || 0) + 1;
+      map[m].total += 1;
     });
     return Object.values(map);
   }, [doAno]);
@@ -4587,7 +4855,7 @@ function PlanejamentoServicosPage({ contratos, onOpenContrato }) {
     { name: "Concluído", value: concluidasMes },
     { name: "Não concluído", value: naoConcluidasMes },
   ].filter((d) => d.value > 0);
-  const PIE_COLORS = { "Concluído": COLORS.green, "Não concluído": COLORS.orange };
+  const PIE_COLORS = { "Concluído": CHART.concluido, "Não concluído": CHART.suspenso };
 
   const [ordemMes, ordenarMesPor] = useOrdenacao();
   const ordenadosMes = useMemo(() => {
@@ -4607,7 +4875,7 @@ function PlanejamentoServicosPage({ contratos, onOpenContrato }) {
           { label: "Serviços", options: servicos, selected: filtroServico, onApply: (v) => { setFiltroServico(v); setPage(1); } },
         ]} />
         <Select value={ano} onChange={(v) => { setAno(v); setPage(1); }} options={anosDisponiveis} />
-        <select value={mes} onChange={(e) => { setMes(e.target.value); setPage(1); }} style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "8px 10px", color: COLORS.steelLight, fontSize: 12.5, fontFamily: "'Inter', sans-serif" }}>
+        <select value={mes} onChange={(e) => { setMes(e.target.value); setPage(1); }} style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "8px 10px", color: COLORS.steelLight, fontSize: 12.5, fontFamily: FONT_SANS }}>
           {MESES_NOMES.map((nome, i) => <option key={nome} value={String(i + 1)}>{nome}</option>)}
         </select>
       </div>
@@ -4616,54 +4884,64 @@ function PlanejamentoServicosPage({ contratos, onOpenContrato }) {
 
         <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 18 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-            <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 14, fontWeight: 600, color: COLORS.ice, textTransform: "uppercase", letterSpacing: "0.02em" }}>Planejamento de Serviços</div>
+            <div style={{ fontFamily: FONT_TITULO, fontSize: 14, fontWeight: 600, color: COLORS.ice, textTransform: "uppercase", letterSpacing: "0.02em" }}>Planejamento de Serviços</div>
             <div style={{ marginLeft: "auto", fontSize: 10, color: COLORS.steel, background: "rgba(255,255,255,0.06)", padding: "3px 9px", borderRadius: 999 }}>{ano}</div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
             <KpiCard icon={Layers} label="Serviços planejados" value={totalServicosAno} accent={COLORS.blue} sub={`${totalTarefasAno} tarefa(s) no ano ${ano}`} />
-            <KpiCard icon={CheckCircle2} label="Tarefas concluídas" value={totalConcluidasAno} accent={COLORS.green} sub="etapas já finalizadas" />
-            <KpiCard icon={Clock} label="Em andamento" value={totalAndamentoAno} accent={COLORS.blue} sub="etapas em execução" />
-            <KpiCard icon={AlertTriangle} label="Pendentes" value={totalPendentesAno} accent={COLORS.orange} sub="ainda não iniciadas" />
+            <KpiCard icon={CheckCircle2} label="Tarefas concluídas" value={totalConcluidasAno} accent={CHART.concluido} sub="etapas já finalizadas" />
+            <KpiCard icon={Clock} label="Em andamento" value={totalAndamentoAno} accent={CHART.andamento} sub="etapas em execução" />
+            <KpiCard icon={AlertTriangle} label="Pendentes" value={totalPendentesAno} accent={CHART.pendente} sub="ainda não iniciadas" />
           </div>
-          <div style={{ background: COLORS.panelAlt, borderRadius: 8, padding: 14 }}>
-            <div style={{ fontSize: 10.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 12 }}>Quantidade de tarefas por mês — todas as situações</div>
-            <ResponsiveContainer width="100%" height={240}>
-              <BarChart data={chartDataAno} margin={{ left: 0, right: 8 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} vertical={false} />
-                <XAxis dataKey="label" tick={{ fill: COLORS.steelLight, fontSize: 10.5 }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
-                <YAxis tick={{ fill: COLORS.steel, fontSize: 10 }} axisLine={{ stroke: COLORS.border }} tickLine={false} allowDecimals={false} />
-                <Tooltip contentStyle={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 6, fontSize: 12 }} cursor={{ fill: "rgba(255,255,255,0.03)" }} />
-                <Legend wrapperStyle={{ fontSize: 10, color: COLORS.steelLight }} />
-                <Bar dataKey="Pendente" stackId="a" fill={COLORS.steel} />
-                <Bar dataKey="Em andamento" stackId="a" fill={COLORS.blue} />
-                <Bar dataKey="Concluído" stackId="a" fill={COLORS.green} />
-                <Bar dataKey="Suspenso" stackId="a" fill={COLORS.orange} radius={[3, 3, 0, 0]} />
-              </BarChart>
+          <div style={{ background: COLORS.panelAlt, borderRadius: 10, padding: 16 }}>
+            <div style={{ fontSize: 12, color: COLORS.ice, fontWeight: 600, marginBottom: 3 }}>Tarefas por mês</div>
+            <div style={{ fontSize: 11, color: COLORS.steel, marginBottom: 14 }}>Empilhado por situação. O número em cima é o total do mês.</div>
+            <ResponsiveContainer width="100%" height={250}>
+              <ComposedChart data={chartDataAno} margin={{ left: 0, right: 10, top: 20 }} barCategoryGap="24%">
+                <CartesianGrid {...GRADE} vertical={false} />
+                <XAxis dataKey="label" tick={EIXO_TICK} axisLine={EIXO_LINHA} tickLine={false} />
+                <YAxis tick={EIXO_TICK} axisLine={false} tickLine={false} allowDecimals={false} width={34} />
+                <Tooltip contentStyle={estiloTooltip()} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
+                <Legend {...LEGENDA} />
+                <Bar dataKey="Pendente" stackId="a" fill={CHART.pendente} />
+                <Bar dataKey="Em andamento" stackId="a" fill={CHART.andamento} />
+                <Bar dataKey="Suspenso" stackId="a" fill={CHART.suspenso} />
+                <Bar dataKey="Concluído" stackId="a" fill={CHART.concluido} radius={[5, 5, 0, 0]} />
+                {/* linha invisível só para carregar o rótulo do total no topo da pilha */}
+                <Line dataKey="total" stroke="transparent" dot={false} activeDot={false} legendType="none" isAnimationActive={false}>
+                  <LabelList dataKey="total" {...ROTULO_TOPO} formatter={semZero} />
+                </Line>
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
         </div>
 
         <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 18 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-            <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 14, fontWeight: 600, color: COLORS.ice, textTransform: "uppercase", letterSpacing: "0.02em" }}>Planejamento do mês</div>
+            <div style={{ fontFamily: FONT_TITULO, fontSize: 14, fontWeight: 600, color: COLORS.ice, textTransform: "uppercase", letterSpacing: "0.02em" }}>Planejamento do mês</div>
             <div style={{ marginLeft: "auto", fontSize: 10, color: COLORS.steel, background: "rgba(255,255,255,0.06)", padding: "3px 9px", borderRadius: 999 }}>{MESES_NOMES[parseInt(mes, 10) - 1]}/{ano}</div>
           </div>
           <div style={{ fontSize: 10.5, color: COLORS.steel, marginBottom: 12 }}>Serviços suspensos não entram nesta comparação — consulte-os no painel ao lado ou em Serviços contratados.</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
             <KpiCard icon={Layers} label="Tarefas do mês" value={doMes.length} accent={COLORS.blue} sub={`${contaServicos(doMes)} serviço(s)`} />
-            <KpiCard icon={CheckCircle2} label="Concluído" value={`${pctConcluidoMes}%`} accent={COLORS.green} sub={`${concluidasMes} de ${doMes.length} tarefa(s)`} />
+            <KpiCard icon={CheckCircle2} label="Concluído" value={`${pctConcluidoMes}%`} accent={CHART.concluido} sub={`${concluidasMes} de ${doMes.length} tarefa(s)`} />
           </div>
-          <div style={{ background: COLORS.panelAlt, borderRadius: 8, padding: 14, marginBottom: 16 }}>
-            <div style={{ fontSize: 10.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 12 }}>Concluído x não concluído</div>
-            <ResponsiveContainer width="100%" height={200}>
-              <PieChart>
-                <Pie data={pieDataMes} dataKey="value" nameKey="name" innerRadius={48} outerRadius={74} paddingAngle={3}>
-                  {pieDataMes.map((d, i) => <Cell key={i} fill={PIE_COLORS[d.name]} />)}
-                </Pie>
-                <Tooltip contentStyle={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 6, fontSize: 12 }} />
-                <Legend wrapperStyle={{ fontSize: 10.5, color: COLORS.steelLight }} />
-              </PieChart>
-            </ResponsiveContainer>
+          <div style={{ background: COLORS.panelAlt, borderRadius: 10, padding: 16, marginBottom: 16 }}>
+            <div style={{ fontSize: 12, color: COLORS.ice, fontWeight: 600, marginBottom: 14 }}>Concluído x não concluído</div>
+            <div style={{ position: "relative" }}>
+              <ResponsiveContainer width="100%" height={200}>
+                <PieChart>
+                  <Pie data={pieDataMes} dataKey="value" nameKey="name" innerRadius={54} outerRadius={80} paddingAngle={3} stroke="none">
+                    {pieDataMes.map((d, i) => <Cell key={i} fill={PIE_COLORS[d.name]} />)}
+                  </Pie>
+                  <Tooltip contentStyle={estiloTooltip()} />
+                  <Legend {...LEGENDA} />
+                </PieChart>
+              </ResponsiveContainer>
+              <div style={{ position: "absolute", inset: 0, bottom: 34 }}>
+                <CentroRosca valor={`${pctConcluidoMes}%`} legenda="concluído" cor={CHART.concluido} />
+              </div>
+            </div>
           </div>
 
           <div style={{ background: COLORS.panelAlt, borderRadius: 8, overflow: "hidden" }}>
@@ -4683,7 +4961,7 @@ function PlanejamentoServicosPage({ contratos, onOpenContrato }) {
                     return (
                       <tr key={c.id} className="row-hover" style={{ cursor: onOpenContrato ? "pointer" : "default", borderBottom: `1px solid ${COLORS.border}` }} onClick={() => onOpenContrato && onOpenContrato(c.cliente, c.unidade, c.proposta)}>
                         <td style={{ padding: "8px 12px", fontSize: 12, fontWeight: 600, color: COLORS.ice }}>{c.cliente}</td>
-                        <td style={{ padding: "8px 12px", fontSize: 11, color: COLORS.steel, fontFamily: "monospace" }}>{c.codigoLoja && c.codigoLoja !== "-" ? c.codigoLoja : "—"}</td>
+                        <td style={{ padding: "8px 12px", fontSize: 11, color: COLORS.steel, fontFamily: FONT_MONO }}>{c.codigoLoja && c.codigoLoja !== "-" ? c.codigoLoja : "—"}</td>
                         <td style={{ padding: "8px 12px", fontSize: 11.5, color: COLORS.steelLight }}>{c.unidade}</td>
                         <td style={{ padding: "8px 12px", fontSize: 11.5, color: COLORS.steelLight, maxWidth: 160 }}>{c.servico}</td>
                         <td style={{ padding: "8px 12px", fontSize: 11.5, color: COLORS.steel, maxWidth: 120 }}>{c.tarefa}</td>
@@ -4779,9 +5057,10 @@ function ServicosContratadosPage({ contratos, processos, onAddContrato, onExclui
   const porServicoSituacao = useMemo(() => {
     const map = {};
     filtrados.forEach((c) => {
-      if (!map[c.servico]) map[c.servico] = { servico: c.servico, "Concluído": 0, "Em andamento": 0, "Pendente": 0, "Suspenso": 0 };
+      if (!map[c.servico]) map[c.servico] = { servico: c.servico, "Concluído": 0, "Em andamento": 0, "Pendente": 0, "Suspenso": 0, total: 0 };
       const st = val(c, "statusParcela");
       map[c.servico][st] = (map[c.servico][st] || 0) + 1;
+      map[c.servico].total += 1;
     });
     return Object.values(map)
       .sort((a, b) => (b["Concluído"] + b["Em andamento"] + b["Pendente"] + b["Suspenso"]) - (a["Concluído"] + a["Em andamento"] + a["Pendente"] + a["Suspenso"]))
@@ -4812,47 +5091,54 @@ function ServicosContratadosPage({ contratos, processos, onAddContrato, onExclui
   return (
     <div>
       <div style={{ display: "flex", gap: 14, marginBottom: 14, flexWrap: "wrap" }}>
-        <KpiCard icon={FileSignature} label="Contratos" value={totalPropostas} accent={COLORS.blue} sub={`${filtrados.length} tarefa(s) no filtro atual`} />
+        <KpiCard icon={FileSignature} label="Contratos" value={totalPropostas} accent={CHART.andamento} sub={`${filtrados.length} tarefa(s) no filtro atual`} />
         <KpiCard icon={Building2} label="Clientes" value={totalClientes} accent={COLORS.steelLight} sub="clientes no filtro atual" />
-        <KpiCard icon={Layers} label="Serviços" value={totalServicos} accent={COLORS.green} sub="serviços distintos contratados" />
+        <KpiCard icon={Layers} label="Serviços" value={totalServicos} accent={CHART.concluido} sub="serviços distintos contratados" />
       </div>
       <div style={{ display: "flex", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
-        <KpiCard icon={CheckCircle2} label="Tarefas concluídas" value={qtdConcluidas} accent={COLORS.green} sub={`${pctConcluido}% do total do filtro`} />
-        <KpiCard icon={Timer} label="Em andamento" value={qtdEmAndamento} accent={COLORS.blue} sub="ainda em execução" />
-        <KpiCard icon={Clock} label="Pendentes" value={qtdPendentes} accent={COLORS.steel} sub="ainda não iniciadas" />
-        <KpiCard icon={MinusCircle} label="Suspensas" value={qtdSuspensas} accent={COLORS.orange} sub="tarefas suspensas" />
+        <KpiCard icon={CheckCircle2} label="Tarefas concluídas" value={qtdConcluidas} accent={CHART.concluido} sub={`${pctConcluido}% do total do filtro`} />
+        <KpiCard icon={Timer} label="Em andamento" value={qtdEmAndamento} accent={CHART.andamento} sub="ainda em execução" />
+        <KpiCard icon={Clock} label="Pendentes" value={qtdPendentes} accent={CHART.pendente} sub="ainda não iniciadas" />
+        <KpiCard icon={MinusCircle} label="Suspensas" value={qtdSuspensas} accent={CHART.suspenso} sub="tarefas suspensas" />
       </div>
 
       <div style={{ display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
-        <div style={{ flex: "1 1 260px", background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 18 }}>
-          <div style={{ fontSize: 12, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 600, marginBottom: 14 }}>Situação das tarefas</div>
-          <ResponsiveContainer width="100%" height={220}>
-            <PieChart>
-              <Pie data={pieSituacao} dataKey="value" nameKey="name" innerRadius={50} outerRadius={78} paddingAngle={3}>
-                {pieSituacao.map((d, i) => <Cell key={i} fill={statusParcelaStyle(d.name).fg} />)}
-              </Pie>
-              <Tooltip contentStyle={{ background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 6, fontSize: 12 }} />
-              <Legend wrapperStyle={{ fontSize: 10.5, color: COLORS.steelLight }} />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-        <div style={{ flex: "2 1 380px", background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 18 }}>
-          <div style={{ fontSize: 12, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 600, marginBottom: 14 }}>Quantidade de tarefas por serviço — por situação</div>
-          <ResponsiveContainer width="100%" height={Math.max(220, porServicoSituacao.length * 46)}>
-            <BarChart data={porServicoSituacao} layout="vertical" margin={{ left: 8, right: 16 }} barCategoryGap="30%">
-              <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} horizontal={false} />
-              <XAxis type="number" tick={{ fill: COLORS.steel, fontSize: 10.5 }} axisLine={{ stroke: COLORS.border }} tickLine={false} allowDecimals={false} />
-              <YAxis type="category" dataKey="servico" width={190} tick={{ fill: COLORS.steelLight, fontSize: 10.5 }} axisLine={{ stroke: COLORS.border }} tickLine={false}
+        <PainelGrafico titulo="Situação das tarefas" subtitulo="Todas as tarefas do filtro atual" style={{ flex: "1 1 260px" }}
+          rodape={<ChipGrafico cor={CHART.concluido}>{pctConcluido}% concluído</ChipGrafico>}>
+          <div style={{ position: "relative" }}>
+            <ResponsiveContainer width="100%" height={220}>
+              <PieChart>
+                <Pie data={pieSituacao} dataKey="value" nameKey="name" innerRadius={58} outerRadius={86} paddingAngle={3} stroke="none">
+                  {pieSituacao.map((d, i) => <Cell key={i} fill={statusParcelaStyle(d.name).fg} />)}
+                </Pie>
+                <Tooltip contentStyle={estiloTooltip()} />
+                <Legend {...LEGENDA} />
+              </PieChart>
+            </ResponsiveContainer>
+            <div style={{ position: "absolute", inset: 0, bottom: 34 }}>
+              <CentroRosca valor={filtrados.length} legenda="tarefas" />
+            </div>
+          </div>
+        </PainelGrafico>
+        <PainelGrafico titulo="Tarefas por serviço" subtitulo="Empilhado por situação · 10 serviços com mais tarefas" style={{ flex: "2 1 380px" }}>
+          <ResponsiveContainer width="100%" height={Math.max(220, porServicoSituacao.length * 48)}>
+            <ComposedChart data={porServicoSituacao} layout="vertical" margin={{ left: 8, right: 40 }} barCategoryGap="28%">
+              <CartesianGrid {...GRADE} horizontal={false} />
+              <XAxis type="number" tick={EIXO_TICK} axisLine={false} tickLine={false} allowDecimals={false} />
+              <YAxis type="category" dataKey="servico" width={190} tick={{ ...EIXO_TICK, fontFamily: FONT_SANS, fill: COLORS.steelLight }} axisLine={EIXO_LINHA} tickLine={false}
                 tickFormatter={(v) => (v && v.length > 26 ? `${v.slice(0, 24)}…` : v)} />
-              <Tooltip contentStyle={{ background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 6, fontSize: 12 }} cursor={{ fill: "rgba(255,255,255,0.03)" }} />
-              <Legend wrapperStyle={{ fontSize: 10.5, color: COLORS.steelLight }} />
-              <Bar dataKey="Concluído" stackId="a" fill={COLORS.green} />
-              <Bar dataKey="Em andamento" stackId="a" fill={COLORS.blue} />
-              <Bar dataKey="Pendente" stackId="a" fill={COLORS.steel} />
-              <Bar dataKey="Suspenso" stackId="a" fill={COLORS.orange} radius={[0, 3, 3, 0]} />
-            </BarChart>
+              <Tooltip contentStyle={estiloTooltip()} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
+              <Legend {...LEGENDA} />
+              <Bar dataKey="Concluído" stackId="a" fill={CHART.concluido} />
+              <Bar dataKey="Em andamento" stackId="a" fill={CHART.andamento} />
+              <Bar dataKey="Pendente" stackId="a" fill={CHART.pendente} />
+              <Bar dataKey="Suspenso" stackId="a" fill={CHART.suspenso} radius={[0, 5, 5, 0]} />
+              <Line dataKey="total" stroke="transparent" dot={false} activeDot={false} legendType="none" isAnimationActive={false}>
+                <LabelList dataKey="total" {...ROTULO_LADO} formatter={semZero} />
+              </Line>
+            </ComposedChart>
           </ResponsiveContainer>
-        </div>
+        </PainelGrafico>
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
@@ -4874,7 +5160,7 @@ function ServicosContratadosPage({ contratos, processos, onAddContrato, onExclui
           <button onClick={exportar} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${COLORS.border}`, color: COLORS.steelLight, borderRadius: 7, padding: "9px 14px", fontSize: 13, cursor: "pointer" }}>
             <Download size={14} /> Exportar CSV
           </button>
-          <button onClick={abrirNovo} style={{ display: "flex", alignItems: "center", gap: 7, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
+          <button onClick={abrirNovo} style={{ display: "flex", alignItems: "center", gap: 7, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.02em", textTransform: "uppercase" }}>
             <Plus size={15} /> Novo serviço
           </button>
         </div>
@@ -4908,9 +5194,9 @@ function ServicosContratadosPage({ contratos, processos, onAddContrato, onExclui
                 return (
                   <tr key={c.id} style={{ borderBottom: `1px solid ${COLORS.border}` }}>
                     {isAdmin && <td style={{ padding: "10px 16px" }}><input type="checkbox" checked={selecionados.has(c.id)} onChange={() => toggleSel(c.id)} /></td>}
-                    <td style={{ padding: "10px 16px", fontSize: 12, color: COLORS.steel, fontFamily: "monospace" }}>{c.proposta}</td>
+                    <td style={{ padding: "10px 16px", fontSize: 12, color: COLORS.steel, fontFamily: FONT_MONO }}>{c.proposta}</td>
                     <td style={{ padding: "10px 16px", fontSize: 13, fontWeight: 600, color: COLORS.ice }}>{c.cliente}</td>
-                    <td style={{ padding: "10px 16px", fontSize: 12, color: COLORS.steel, fontFamily: "monospace" }}>{c.codigoLoja && c.codigoLoja !== "-" ? c.codigoLoja : "—"}</td>
+                    <td style={{ padding: "10px 16px", fontSize: 12, color: COLORS.steel, fontFamily: FONT_MONO }}>{c.codigoLoja && c.codigoLoja !== "-" ? c.codigoLoja : "—"}</td>
                     <td style={{ padding: "10px 16px", fontSize: 12.5, color: COLORS.steelLight }}>{c.unidade}</td>
                     <td style={{ padding: "10px 16px", fontSize: 12.5, color: COLORS.steelLight, maxWidth: 220 }}>{c.servico}</td>
                     <td style={{ padding: "10px 16px", fontSize: 12, color: COLORS.steel }}>{c.tarefa}</td>
@@ -5311,7 +5597,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
   const porResponsavel = useMemo(() => {
     return RESPONSAVEIS.map((r) => ({ name: r, value: filtrados.filter((p) => STATUS_CONFIG[p.statusAtual].responsavel === r).length })).filter((r) => r.value > 0);
   }, [filtrados]);
-  const RESP_COLOR = { Primers: COLORS.orange, Cliente: COLORS.yellow, Órgão: COLORS.blue, Finalizado: COLORS.green };
+  const RESP_COLOR = { Primers: CHART.suspenso, Cliente: CHART.destaque, Órgão: CHART.andamento, Finalizado: CHART.concluido };
 
   // Gráfico 3: por tipo de serviço (assunto)
   const porAssunto = useMemo(() => {
@@ -5329,9 +5615,9 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
 
   return (
     <RascunhoContext.Provider value={rascunho}>
-    <div style={{ fontFamily: "'Inter', sans-serif", background: COLORS.bg, minHeight: "100vh", width: "100%", color: COLORS.ice, display: "flex", flexDirection: "column", position: "relative", paddingBottom: rascunho.total > 0 ? 58 : 0 }}>
+    <div style={{ fontFamily: FONT_SANS, background: COLORS.bg, minHeight: "100vh", width: "100%", color: COLORS.ice, display: "flex", flexDirection: "column", position: "relative", paddingBottom: rascunho.total > 0 ? 58 : 0 }}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+        @import url('${FONTES_GOOGLE}');
         * { box-sizing: border-box; }
         ::placeholder { color: ${COLORS.steel}; opacity: 0.7; }
         .blueprint-bg { background-image: linear-gradient(${COLORS.border} 1px, transparent 1px), linear-gradient(90deg, ${COLORS.border} 1px, transparent 1px); background-size: 42px 42px; }
@@ -5344,15 +5630,15 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
 
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
       {/* SIDEBAR */}
-      <aside style={{ width: 230, background: COLORS.panel, borderRight: `1px solid ${COLORS.border}`, padding: "22px 16px", flexShrink: 0 }}>
+      <aside style={{ width: 230, background: MENU.fundo, borderRight: `1px solid ${COLORS.border}`, padding: "22px 16px", flexShrink: 0 }}>
         <div style={{ marginBottom: 22 }}>
-          {logoBase64 && <img src={logoBase64} alt="Logo" style={{ maxHeight: 80, maxWidth: 190, objectFit: "contain", marginBottom: 8, display: "block" }} />}
-          <div style={{ fontFamily: "'Oswald', sans-serif", fontWeight: 700, fontSize: 15, color: COLORS.ice, letterSpacing: "0.02em", textTransform: "uppercase" }}>Controle de Processos e Serviços</div>
+          {logoBase64 && <img src={logoBase64} alt="Logo" style={{ maxHeight: LOGO_ALTURA_TELA, maxWidth: "100%", objectFit: "contain", marginBottom: 10, display: "block" }} />}
+          <div style={{ fontFamily: FONT_TITULO, fontWeight: 700, fontSize: 15, color: MENU.titulo, letterSpacing: "0.01em", textTransform: "uppercase" }}>Controle de Processos e Serviços</div>
         </div>
         <nav style={{ display: "flex", flexDirection: "column", gap: 3 }}>
           <div className="nav-item" onClick={() => setClientesOpen((o) => !o)} style={{
             display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 10px", borderRadius: 7,
-            background: isClientes ? COLORS.redDim : "transparent", color: isClientes ? COLORS.red : COLORS.steelLight,
+            background: isClientes ? MENU.ativoFundo : "transparent", color: isClientes ? MENU.ativo : MENU.texto,
             fontSize: 13.5, fontWeight: isClientes ? 700 : 500,
           }}>
             <span style={{ display: "flex", alignItems: "center", gap: 10 }}><Building2 size={16} />Clientes</span>
@@ -5368,8 +5654,8 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
               ].map((item) => (
                 <div key={item.id} className="nav-item" onClick={() => setTab(item.id)} style={{
                   display: "flex", alignItems: "center", gap: 9, padding: "7px 10px", borderRadius: 7,
-                  background: tab === item.id ? COLORS.redDim : "transparent", color: tab === item.id ? COLORS.red : COLORS.steel,
-                  fontSize: 12.5, fontWeight: tab === item.id ? 700 : 500, borderLeft: `2px solid ${tab === item.id ? COLORS.red : COLORS.border}`,
+                  background: tab === item.id ? MENU.ativoFundo : "transparent", color: tab === item.id ? MENU.ativo : MENU.texto,
+                  fontSize: 12.5, fontWeight: tab === item.id ? 700 : 500, borderLeft: `2px solid ${tab === item.id ? MENU.ativo : COLORS.border}`, opacity: tab === item.id ? 1 : 0.85,
                 }}><item.icon size={13} />{item.label}</div>
               ))}
             </div>
@@ -5377,7 +5663,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
 
           <div className="nav-item" onClick={() => setDashboardOpen((o) => !o)} style={{
             display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 10px", borderRadius: 7,
-            background: isDashboard ? COLORS.redDim : "transparent", color: isDashboard ? COLORS.red : COLORS.steelLight,
+            background: isDashboard ? MENU.ativoFundo : "transparent", color: isDashboard ? MENU.ativo : MENU.texto,
             fontSize: 13.5, fontWeight: isDashboard ? 700 : 500,
           }}>
             <span style={{ display: "flex", alignItems: "center", gap: 10 }}><LayoutDashboard size={16} />Dashboard</span>
@@ -5391,8 +5677,8 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
               ].map((item) => (
                 <div key={item.id} className="nav-item" onClick={() => setTab(item.id)} style={{
                   display: "flex", alignItems: "center", gap: 9, padding: "7px 10px", borderRadius: 7,
-                  background: tab === item.id ? COLORS.redDim : "transparent", color: tab === item.id ? COLORS.red : COLORS.steel,
-                  fontSize: 12.5, fontWeight: tab === item.id ? 700 : 500, borderLeft: `2px solid ${tab === item.id ? COLORS.red : COLORS.border}`,
+                  background: tab === item.id ? MENU.ativoFundo : "transparent", color: tab === item.id ? MENU.ativo : MENU.texto,
+                  fontSize: 12.5, fontWeight: tab === item.id ? 700 : 500, borderLeft: `2px solid ${tab === item.id ? MENU.ativo : COLORS.border}`, opacity: tab === item.id ? 1 : 0.85,
                 }}><item.icon size={13} />{item.label}</div>
               ))}
             </div>
@@ -5408,7 +5694,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
           ].map((item) => (
             <div key={item.id} className="nav-item" onClick={() => setTab(item.id)} style={{
               display: "flex", alignItems: "center", gap: 10, padding: "9px 10px", borderRadius: 7,
-              background: tab === item.id ? COLORS.redDim : "transparent", color: tab === item.id ? COLORS.red : COLORS.steelLight,
+              background: tab === item.id ? MENU.ativoFundo : "transparent", color: tab === item.id ? MENU.ativo : MENU.texto,
               fontSize: 13.5, fontWeight: tab === item.id ? 700 : 500,
             }}><item.icon size={16} />{item.label}</div>
           ))}
@@ -5428,7 +5714,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
       <main className="blueprint-bg" style={{ flex: 1, minWidth: 0, padding: "22px 28px 40px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 12 }}>
           <div>
-            <h1 style={{ fontFamily: "'Oswald', sans-serif", fontSize: 22, fontWeight: 600, color: COLORS.ice, textTransform: "uppercase", letterSpacing: "0.02em" }}>
+            <h1 style={{ fontFamily: FONT_TITULO, fontSize: 22, fontWeight: 600, color: COLORS.ice, textTransform: "uppercase", letterSpacing: "0.02em" }}>
               {tab === "dashboard-processos" && "Dashboard · Processos / Serviços"}
               {tab === "dashboard-servicos" && "Dashboard · Planejamento de Serviços"}
               {tab === "clientes" && "Clientes"}
@@ -5458,7 +5744,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
           {(tab === "processos" || tab === "dashboard-processos") && (
             <div style={{ display: "flex", gap: 10 }}>
               {tab === "processos" && (
-                <button onClick={() => setShowNew(true)} style={{ display: "flex", alignItems: "center", gap: 7, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Oswald', sans-serif", letterSpacing: "0.02em", textTransform: "uppercase" }}>
+                <button onClick={() => setShowNew(true)} style={{ display: "flex", alignItems: "center", gap: 7, background: COLORS.red, border: "none", color: "#fff", borderRadius: 7, padding: "9px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: FONT_TITULO, letterSpacing: "0.02em", textTransform: "uppercase" }}>
                   <Plus size={15} /> Novo processo
                 </button>
               )}
@@ -5472,19 +5758,19 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
           <>
             <div style={{ display: "flex", gap: 14, marginBottom: 14, flexWrap: "wrap" }}>
               <KpiCard icon={FileStack} label="Total (filtro atual)" value={total} accent={COLORS.blue} sub={`${processos.length} no total geral`} />
-              <KpiCard icon={Clock} label={`Com a ${NOME_RESPONSAVEL}`} value={comPrimers} accent={COLORS.orange} sub="nossa responsabilidade" />
-              <KpiCard icon={Timer} label="Com o cliente" value={comCliente} accent={COLORS.yellow} sub="aguardando retorno" />
-              <KpiCard icon={Building2} label="Com o órgão" value={comOrgao} accent={COLORS.blue} sub="aguardando análise" />
-              <KpiCard icon={AlertTriangle} label="Vencidos" value={vencidos} accent={COLORS.red} sub="prazo já expirado" />
+              <KpiCard icon={Clock} label={`Com a ${NOME_RESPONSAVEL}`} value={comPrimers} accent={CHART.suspenso} sub="nossa responsabilidade" />
+              <KpiCard icon={Timer} label="Com o cliente" value={comCliente} accent={CHART.destaque} sub="aguardando retorno" />
+              <KpiCard icon={Building2} label="Com o órgão" value={comOrgao} accent={CHART.andamento} sub="aguardando análise" />
+              <KpiCard icon={AlertTriangle} label="Vencidos" value={vencidos} accent={CHART.destaque} sub="prazo já expirado" />
             </div>
             <div style={{ display: "flex", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
               <KpiCard icon={ListChecks} label="Processo" value={administrativos} accent={COLORS.steelLight} sub="processos administrativos" />
               <KpiCard icon={Wrench} label="Serviço Técnico" value={tecnicos} accent={COLORS.steelLight} sub="serviços técnicos" />
               <KpiCard icon={Clock} label="Aguardando início" value={aguardandoInicio} accent={COLORS.steel} sub="importados, ainda não iniciados" />
-              <KpiCard icon={Search} label="Em análise" value={emAnalise} accent={COLORS.blue} sub="protocolado / aguardando órgão" />
-              <KpiCard icon={AlertTriangle} label="Em exigência" value={emExigencia} accent={COLORS.orange} sub={`${NOME_RESPONSAVEL} ou cliente`} />
-              <KpiCard icon={CheckCircle2} label="Concluídos / Deferidos" value={concluidos} accent={COLORS.green} sub="finalizados com sucesso" />
-              <KpiCard icon={XCircle} label="Indeferidos" value={indeferidos} accent={COLORS.overdue} sub="negados pelo órgão" />
+              <KpiCard icon={Search} label="Em análise" value={emAnalise} accent={CHART.andamento} sub="protocolado / aguardando órgão" />
+              <KpiCard icon={AlertTriangle} label="Em exigência" value={emExigencia} accent={CHART.suspenso} sub={`${NOME_RESPONSAVEL} ou cliente`} />
+              <KpiCard icon={CheckCircle2} label="Concluídos / Deferidos" value={concluidos} accent={CHART.concluido} sub="finalizados com sucesso" />
+              <KpiCard icon={XCircle} label="Indeferidos" value={indeferidos} accent={CHART.destaque} sub="negados pelo órgão" />
             </div>
 
             <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 18, marginBottom: 20 }}>
@@ -5508,44 +5794,50 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
             <AgendaSemanal processos={filtrados} agendaItens={agendaItens} onOpenProcesso={(p) => setSelected(p)} onAddItem={addAgendaItem} onRemoveItem={removeAgendaItem} />
 
             <div style={{ display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
-              <div style={{ flex: "2 1 380px", background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 18 }}>
-                <div style={{ fontSize: 12, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 600, marginBottom: 14 }}>{porClienteOuUnidade.label}</div>
-                <ResponsiveContainer width="100%" height={240}>
-                  <BarChart data={porClienteOuUnidade.data} layout="vertical" margin={{ left: 8, right: 16 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} horizontal={false} />
-                    <XAxis type="number" tick={{ fill: COLORS.steel, fontSize: 11 }} axisLine={{ stroke: COLORS.border }} tickLine={false} allowDecimals={false} />
-                    <YAxis type="category" dataKey="k" width={140} tick={{ fill: COLORS.steelLight, fontSize: 11 }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
-                    <Tooltip contentStyle={{ background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 6, fontSize: 12 }} labelStyle={{ color: COLORS.ice }} cursor={{ fill: "rgba(255,255,255,0.03)" }} />
-                    <Bar dataKey="qtd" fill={COLORS.red} radius={[0, 3, 3, 0]} barSize={14} />
+              <PainelGrafico titulo={porClienteOuUnidade.label} subtitulo="Quantidade de processos e serviços no filtro atual" style={{ flex: "2 1 380px" }}>
+                <ResponsiveContainer width="100%" height={250}>
+                  <BarChart data={porClienteOuUnidade.data} layout="vertical" margin={{ left: 8, right: 34 }} barCategoryGap="26%">
+                    <CartesianGrid {...GRADE} horizontal={false} />
+                    <XAxis type="number" tick={EIXO_TICK} axisLine={false} tickLine={false} allowDecimals={false} />
+                    <YAxis type="category" dataKey="k" width={150} tick={{ ...EIXO_TICK, fontFamily: FONT_SANS, fill: COLORS.steelLight }} axisLine={EIXO_LINHA} tickLine={false} />
+                    <Tooltip contentStyle={estiloTooltip()} labelStyle={{ color: COLORS.ice, fontWeight: 600 }} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
+                    <Bar dataKey="qtd" name="Processos" fill={CHART.andamento} radius={[0, 5, 5, 0]} barSize={16}>
+                      <LabelList dataKey="qtd" {...ROTULO_LADO} formatter={semZero} />
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer>
-              </div>
-              <div style={{ flex: "1 1 260px", background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 18 }}>
-                <div style={{ fontSize: 12, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 600, marginBottom: 14 }}>Por responsabilidade</div>
-                <ResponsiveContainer width="100%" height={240}>
-                  <PieChart>
-                    <Pie data={porResponsavel} dataKey="value" nameKey="name" innerRadius={52} outerRadius={80} paddingAngle={3}>
-                      {porResponsavel.map((entry, i) => <Cell key={i} fill={RESP_COLOR[entry.name]} />)}
-                    </Pie>
-                    <Tooltip formatter={(value, name) => [value, rotuloResponsavel(name)]} contentStyle={{ background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 6, fontSize: 12 }} />
-                    <Legend formatter={(value) => rotuloResponsavel(value)} wrapperStyle={{ fontSize: 11, color: COLORS.steelLight }} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
+              </PainelGrafico>
+              <PainelGrafico titulo="Por responsabilidade" subtitulo="De quem está a bola em cada processo" style={{ flex: "1 1 260px" }}>
+                <div style={{ position: "relative" }}>
+                  <ResponsiveContainer width="100%" height={240}>
+                    <PieChart>
+                      <Pie data={porResponsavel} dataKey="value" nameKey="name" innerRadius={60} outerRadius={88} paddingAngle={3} stroke="none">
+                        {porResponsavel.map((entry, i) => <Cell key={i} fill={RESP_COLOR[entry.name]} />)}
+                      </Pie>
+                      <Tooltip formatter={(value, name) => [value, rotuloResponsavel(name)]} contentStyle={estiloTooltip()} />
+                      <Legend formatter={(value) => rotuloResponsavel(value)} {...LEGENDA} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div style={{ position: "absolute", inset: 0, bottom: 34 }}>
+                    <CentroRosca valor={total} legenda="processos" />
+                  </div>
+                </div>
+              </PainelGrafico>
             </div>
 
-            <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 18, marginBottom: 20 }}>
-              <div style={{ fontSize: 12, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 600, marginBottom: 14 }}>Por tipo de serviço</div>
-              <ResponsiveContainer width="100%" height={Math.max(160, porAssunto.length * 34)}>
-                <BarChart data={porAssunto} layout="vertical" margin={{ left: 8, right: 16 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} horizontal={false} />
-                  <XAxis type="number" tick={{ fill: COLORS.steel, fontSize: 11 }} axisLine={{ stroke: COLORS.border }} tickLine={false} allowDecimals={false} />
-                  <YAxis type="category" dataKey="assunto" width={260} tick={{ fill: COLORS.steelLight, fontSize: 11 }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
-                  <Tooltip contentStyle={{ background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 6, fontSize: 12 }} cursor={{ fill: "rgba(255,255,255,0.03)" }} />
-                  <Bar dataKey="qtd" fill={COLORS.blue} radius={[0, 3, 3, 0]} barSize={14} />
+            <PainelGrafico titulo="Por tipo de serviço" subtitulo="Assuntos com mais processos e serviços abertos" style={{ marginBottom: 20 }}>
+              <ResponsiveContainer width="100%" height={Math.max(170, porAssunto.length * 38)}>
+                <BarChart data={porAssunto} layout="vertical" margin={{ left: 8, right: 34 }} barCategoryGap="26%">
+                  <CartesianGrid {...GRADE} horizontal={false} />
+                  <XAxis type="number" tick={EIXO_TICK} axisLine={false} tickLine={false} allowDecimals={false} />
+                  <YAxis type="category" dataKey="assunto" width={260} tick={{ ...EIXO_TICK, fontFamily: FONT_SANS, fill: COLORS.steelLight }} axisLine={EIXO_LINHA} tickLine={false} />
+                  <Tooltip contentStyle={estiloTooltip()} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
+                  <Bar dataKey="qtd" name="Processos" fill={CHART.concluido} radius={[0, 5, 5, 0]} barSize={16}>
+                    <LabelList dataKey="qtd" {...ROTULO_LADO} formatter={semZero} />
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
-            </div>
+            </PainelGrafico>
 
             {bloqueados.length > 0 && (
               <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "6px 0 4px", marginBottom: 20 }}>
@@ -5655,14 +5947,14 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
                           <td style={{ padding: "11px 16px", borderBottom: `1px solid ${COLORS.border}` }}>
                             <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.ice, display: "flex", alignItems: "center", gap: 6 }}><Building2 size={12} color={COLORS.steel} />{p.cliente}</div>
                           </td>
-                          <td style={{ padding: "11px 16px", fontSize: 12, color: COLORS.steel, borderBottom: `1px solid ${COLORS.border}`, fontFamily: "monospace" }}>{codigosUnidade[`${p.cliente}|${p.unidade}`] || "—"}</td>
+                          <td style={{ padding: "11px 16px", fontSize: 12, color: COLORS.steel, borderBottom: `1px solid ${COLORS.border}`, fontFamily: FONT_MONO }}>{codigosUnidade[`${p.cliente}|${p.unidade}`] || "—"}</td>
                           <td style={{ padding: "11px 16px", fontSize: 12.5, color: COLORS.steelLight, borderBottom: `1px solid ${COLORS.border}` }}>{p.unidade}</td>
                           <td style={{ padding: "11px 16px", fontSize: 12.5, color: COLORS.steelLight, borderBottom: `1px solid ${COLORS.border}`, maxWidth: 220 }}>
                             {p.assunto}{bloqueio && <Lock size={11} color={COLORS.red} style={{ marginLeft: 6, verticalAlign: "middle" }} />}
                           </td>
                           <td style={{ padding: "11px 16px", fontSize: 11.5, color: COLORS.steel, borderBottom: `1px solid ${COLORS.border}`, whiteSpace: "nowrap" }}>{p.tipo}</td>
                           <td style={{ padding: "11px 16px", fontSize: 11.5, color: COLORS.steelLight, borderBottom: `1px solid ${COLORS.border}`, whiteSpace: "nowrap" }}>{p.tecnico}</td>
-                          <td style={{ padding: "11px 16px", fontSize: 12, color: COLORS.steel, borderBottom: `1px solid ${COLORS.border}`, fontFamily: "monospace" }}>{p.numero}</td>
+                          <td style={{ padding: "11px 16px", fontSize: 12, color: COLORS.steel, borderBottom: `1px solid ${COLORS.border}`, fontFamily: FONT_MONO }}>{p.numero}</td>
                           <td style={{ padding: "11px 16px", borderBottom: `1px solid ${COLORS.border}` }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                               <Pill fg={st.fg} bg={st.bg} stamp>{statusLabel(p.statusAtual, p.tipo)}</Pill>
@@ -5808,7 +6100,7 @@ export default function App() {
   const atualizarLogo = (novoLogo) => { LOGO_BASE64 = novoLogo; setLogoBase64(novoLogo); };
 
   if (verificandoSessao) {
-    return <div style={{ minHeight: "100vh", background: COLORS.bg, display: "flex", alignItems: "center", justifyContent: "center", color: COLORS.steel, fontFamily: "'Inter', sans-serif", fontSize: 13 }}>Carregando...</div>;
+    return <div style={{ minHeight: "100vh", background: COLORS.bg, display: "flex", alignItems: "center", justifyContent: "center", color: COLORS.steel, fontFamily: FONT_SANS, fontSize: 13 }}>Carregando...</div>;
   }
   if (!usuarioLogado) return <LoginScreen onLogin={setUsuarioLogado} logoBase64={logoBase64} />;
   return <ControleProcessos usuarioLogado={usuarioLogado} onLogout={sair} logoBase64={logoBase64} onLogoAtualizado={atualizarLogo} />;
