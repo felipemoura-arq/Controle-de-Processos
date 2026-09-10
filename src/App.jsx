@@ -723,6 +723,37 @@ function imprimirRelatorio(processo) {
    ATOMS
    ============================================================ */
 /* ============================================================
+   LINHAS DE TABELA COM ALTURA PADRÃO — toda linha tem a mesma
+   altura, do tamanho de UMA linha de texto, não importa quanto
+   texto a célula tenha. O que não couber é cortado com "..." e o
+   texto completo aparece ao passar o mouse por cima.
+   ============================================================ */
+const ALTURA_LINHA = 42;
+const LARGURA_MENU = 230;
+
+/* Célula: nunca quebra linha, corta com reticências e mostra o
+   conteúdo inteiro no tooltip do navegador. */
+function Td({ children, titulo, largura, style, onClick, colSpan }) {
+  const texto = titulo !== undefined ? titulo : (typeof children === "string" || typeof children === "number" ? String(children) : undefined);
+  return (
+    <td colSpan={colSpan} onClick={onClick} style={{
+      padding: "0 16px", height: ALTURA_LINHA, maxHeight: ALTURA_LINHA,
+      borderBottom: `1px solid ${COLORS.border}`, verticalAlign: "middle",
+      fontSize: 12.5, color: COLORS.steelLight,
+      ...(largura ? { width: largura, maxWidth: largura } : {}),
+      ...style,
+    }}>
+      {/* largura fixa + reticências: a linha nunca cresce, e o texto
+          inteiro fica no tooltip do navegador */}
+      <div title={texto} style={{
+        width: largura || "auto", maxWidth: largura || "none",
+        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+      }}>{children}</div>
+    </td>
+  );
+}
+
+/* ============================================================
    ORDENAÇÃO DE TABELAS — clicar no título da coluna ordena a
    listagem (1º clique crescente, 2º decrescente, 3º volta ao
    padrão). Usada em todas as telas com tabela.
@@ -2137,6 +2168,12 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
 
   const fechar = () => { if (pendentes > 0) setConfirmarSaida(true); else onClose(); };
 
+  /* O pop-up ocupa a tela inteira à direita do menu lateral. Quando a
+     barra de "alterações não salvas" está visível no rodapé, o pop-up
+     encolhe o suficiente para não ficar escondido atrás dela. */
+  const rascunhoGlobal = useRascunho();
+  const alturaBarra = rascunhoGlobal && rascunhoGlobal.total > 0 ? 58 : 0;
+
   const Row = ({ label, value }) => (
     <div style={{ display: "flex", justifyContent: "space-between", padding: "9px 0", borderBottom: `1px solid ${COLORS.border}` }}>
       <span style={{ fontSize: 12, color: COLORS.steel }}>{label}</span>
@@ -2145,9 +2182,9 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
   );
 
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 40, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-      <div style={{ position: "absolute", inset: 0, background: "rgba(5,10,16,0.7)" }} onClick={onClose} />
-      <div style={{ position: "relative", width: "100%", maxWidth: 860, maxHeight: "92vh", background: COLORS.panel, border: `1px solid ${COLORS.borderStrong}`, borderRadius: 12, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <div style={{ position: "fixed", top: 0, right: 0, bottom: alturaBarra, left: LARGURA_MENU, zIndex: 40, display: "flex", padding: 14 }}>
+      <div style={{ position: "fixed", top: 0, right: 0, bottom: alturaBarra, left: LARGURA_MENU, background: "rgba(5,10,16,0.55)" }} onClick={fechar} />
+      <div style={{ position: "relative", width: "100%", height: "100%", background: COLORS.panel, border: `1px solid ${COLORS.borderStrong}`, borderRadius: 12, display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 20px 50px rgba(0,0,0,0.5)" }}>
         {/* HEADER — resumo visível sempre, sem precisar trocar de aba */}
         <div style={{ padding: "18px 22px 14px", borderBottom: `1px solid ${COLORS.border}` }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -2207,7 +2244,7 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
         {/* BODY */}
         <div style={{ padding: "18px 22px", overflowY: "auto", flex: 1 }}>
           {!iniciado && (
-            <div style={{ textAlign: "center", padding: "50px 20px" }}>
+            <div style={{ textAlign: "center", padding: "60px 20px", maxWidth: 620, margin: "0 auto" }}>
               <Clock size={34} color={COLORS.steel} style={{ marginBottom: 14 }} />
               <div style={{ fontSize: 15, color: COLORS.ice, fontFamily: FONT_TITULO, fontWeight: 600, marginBottom: 6 }}>Este serviço ainda não foi iniciado</div>
               <div style={{ fontSize: 12.5, color: COLORS.steel, marginBottom: 20, maxWidth: 380, marginLeft: "auto", marginRight: "auto" }}>
@@ -2227,7 +2264,8 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
           )}
 
           {iniciado && tab === "geral" && (
-            <div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(400px, 1fr))", gap: "0 34px", alignItems: "start" }}>
+              <div>
               <Row label="Cliente" value={processo.cliente} />
               <Row label="Código da unidade" value={codigoUnidade || "—"} />
               <Row label="Unidade" value={processo.unidade} />
@@ -2271,7 +2309,9 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
 
               <RowEditavel label="Data de conclusão" tipo="date" valor={processo.dataConclusao} onConfirmar={(v) => patch({ dataConclusao: v })} />
               <RowEditavel label="Prestador / Fornecedor" tipo="text" valor={processo.prestador === "-" ? "" : processo.prestador} onConfirmar={(v) => patch({ prestador: v })} />
+              </div>
 
+              <div>
               <Row label="Site do órgão" value={processo.site || "—"} />
               <Row label="Login" value={processo.login || "—"} />
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${COLORS.border}` }}>
@@ -2344,6 +2384,7 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
                   )}
                 </>
               )}
+              </div>
             </div>
           )}
           {iniciado && tab === "documentos" && <DocumentosChecklistTab processo={processo} onUpdate={onUpdate} />}
@@ -4641,13 +4682,15 @@ function ClientesPage({ contratos, onAddContrato, isAdmin, onOpenCliente, onExcl
             </tr></thead>
             <tbody>
               {paginados.map((c) => (
-                <tr key={c.cliente} className="row-hover" style={{ borderBottom: `1px solid ${COLORS.border}`, cursor: "pointer" }} onClick={() => onOpenCliente(c.cliente)}>
-                  {isAdmin && <td style={{ padding: "11px 16px" }} onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selecionados.has(c.cliente)} onChange={() => toggleSel(c.cliente)} /></td>}
-                  <td style={{ padding: "11px 16px", fontSize: 11, color: COLORS.steel, fontFamily: FONT_MONO }}>{idsClientes[c.cliente]}</td>
-                  <td style={{ padding: "11px 16px", fontSize: 13, fontWeight: 600, color: COLORS.ice, display: "flex", alignItems: "center", gap: 6 }}><Building2 size={12} color={COLORS.steel} />{c.cliente}</td>
-                  <td style={{ padding: "11px 16px", fontSize: 13, color: COLORS.steelLight }}>{c.unidades}</td>
-                  <td style={{ padding: "11px 16px", fontSize: 13, color: COLORS.steelLight }}>{c.propostas}</td>
-                  <td style={{ padding: "11px 16px" }}><ChevronRight size={15} color={COLORS.steel} /></td>
+                <tr key={c.cliente} className="row-hover" style={{ borderBottom: `1px solid ${COLORS.border}`, cursor: "pointer", height: ALTURA_LINHA }} onClick={() => onOpenCliente(c.cliente)}>
+                  {isAdmin && <Td style={{ width: 42 }} onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selecionados.has(c.cliente)} onChange={() => toggleSel(c.cliente)} /></Td>}
+                  <Td style={{ fontSize: 11, color: COLORS.steel, fontFamily: FONT_MONO }}>{idsClientes[c.cliente]}</Td>
+                  <Td titulo={c.cliente} largura={420} style={{ fontSize: 13, fontWeight: 600, color: COLORS.ice }}>
+                    <Building2 size={12} color={COLORS.steel} style={{ verticalAlign: "-2px", marginRight: 6 }} />{c.cliente}
+                  </Td>
+                  <Td style={{ fontSize: 13, fontFamily: FONT_MONO }}>{c.unidades}</Td>
+                  <Td style={{ fontSize: 13, fontFamily: FONT_MONO }}>{c.propostas}</Td>
+                  <Td style={{ width: 40 }}><ChevronRight size={15} color={COLORS.steel} /></Td>
                 </tr>
               ))}
               {filtrados.length === 0 && <tr><td colSpan={6} style={{ padding: 40, textAlign: "center", color: COLORS.steel, fontSize: 13 }}>Nenhum cliente encontrado.</td></tr>}
@@ -4748,15 +4791,15 @@ function UnidadesPage({ contratos, onAddContrato, onOpenUnidade, isAdmin, onExcl
               {paginados.map((u, i) => {
                 const sc = statusContratoStyle(u.statusContrato);
                 return (
-                  <tr key={i} className="row-hover" style={{ borderBottom: `1px solid ${COLORS.border}`, cursor: "pointer" }} onClick={() => onOpenUnidade(u.cliente, u.unidade)}>
-                    {isAdmin && <td style={{ padding: "11px 16px" }} onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selecionados.has(chave(u))} onChange={() => toggleSel(chave(u))} /></td>}
-                    <td style={{ padding: "11px 16px", fontSize: 11, color: COLORS.steel, fontFamily: FONT_MONO }}>{idsUnidades[`${u.cliente}|${u.unidade}`]}</td>
-                    <td style={{ padding: "11px 16px", fontSize: 13, fontWeight: 600, color: COLORS.ice }}>{u.cliente}</td>
-                    <td style={{ padding: "11px 16px", fontSize: 12.5, color: COLORS.steel, fontFamily: FONT_MONO }}>{u.codigoUnidade || "—"}</td>
-                    <td style={{ padding: "11px 16px", fontSize: 13, color: COLORS.steelLight }}>{u.unidade}</td>
-                    <td style={{ padding: "11px 16px", fontSize: 13, color: COLORS.steelLight }}>{u.servicos}</td>
-                    <td style={{ padding: "11px 16px" }}><Pill fg={sc.fg} bg={sc.bg}>{u.statusContrato}</Pill></td>
-                    <td style={{ padding: "11px 16px" }}><ChevronRight size={15} color={COLORS.steel} /></td>
+                  <tr key={i} className="row-hover" style={{ borderBottom: `1px solid ${COLORS.border}`, cursor: "pointer", height: ALTURA_LINHA }} onClick={() => onOpenUnidade(u.cliente, u.unidade)}>
+                    {isAdmin && <Td style={{ width: 42 }} onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selecionados.has(chave(u))} onChange={() => toggleSel(chave(u))} /></Td>}
+                    <Td style={{ fontSize: 11, color: COLORS.steel, fontFamily: FONT_MONO }}>{idsUnidades[`${u.cliente}|${u.unidade}`]}</Td>
+                    <Td largura={260} style={{ fontSize: 13, fontWeight: 600, color: COLORS.ice }}>{u.cliente}</Td>
+                    <Td style={{ fontSize: 12.5, color: COLORS.steel, fontFamily: FONT_MONO }}>{u.codigoUnidade || "—"}</Td>
+                    <Td largura={280} style={{ fontSize: 13 }}>{u.unidade}</Td>
+                    <Td style={{ fontSize: 13, fontFamily: FONT_MONO }}>{u.servicos}</Td>
+                    <Td titulo={u.statusContrato}><Pill fg={sc.fg} bg={sc.bg}>{u.statusContrato}</Pill></Td>
+                    <Td style={{ width: 40 }}><ChevronRight size={15} color={COLORS.steel} /></Td>
                   </tr>
                 );
               })}
@@ -4959,13 +5002,13 @@ function PlanejamentoServicosPage({ contratos, onOpenContrato }) {
                   {paginadosMes.map((c) => {
                     const sp = statusParcelaStyle(c.statusParcela);
                     return (
-                      <tr key={c.id} className="row-hover" style={{ cursor: onOpenContrato ? "pointer" : "default", borderBottom: `1px solid ${COLORS.border}` }} onClick={() => onOpenContrato && onOpenContrato(c.cliente, c.unidade, c.proposta)}>
-                        <td style={{ padding: "8px 12px", fontSize: 12, fontWeight: 600, color: COLORS.ice }}>{c.cliente}</td>
-                        <td style={{ padding: "8px 12px", fontSize: 11, color: COLORS.steel, fontFamily: FONT_MONO }}>{c.codigoLoja && c.codigoLoja !== "-" ? c.codigoLoja : "—"}</td>
-                        <td style={{ padding: "8px 12px", fontSize: 11.5, color: COLORS.steelLight }}>{c.unidade}</td>
-                        <td style={{ padding: "8px 12px", fontSize: 11.5, color: COLORS.steelLight, maxWidth: 160 }}>{c.servico}</td>
-                        <td style={{ padding: "8px 12px", fontSize: 11.5, color: COLORS.steel, maxWidth: 120 }}>{c.tarefa}</td>
-                        <td style={{ padding: "8px 12px" }}><Pill fg={sp.fg} bg={sp.bg}>{c.statusParcela}</Pill></td>
+                      <tr key={c.id} className="row-hover" style={{ cursor: onOpenContrato ? "pointer" : "default", borderBottom: `1px solid ${COLORS.border}`, height: ALTURA_LINHA }} onClick={() => onOpenContrato && onOpenContrato(c.cliente, c.unidade, c.proposta)}>
+                        <Td largura={150} style={{ padding: "0 12px", fontSize: 12, fontWeight: 600, color: COLORS.ice }}>{c.cliente}</Td>
+                        <Td style={{ padding: "0 12px", fontSize: 11, color: COLORS.steel, fontFamily: FONT_MONO }}>{c.codigoLoja && c.codigoLoja !== "-" ? c.codigoLoja : "—"}</Td>
+                        <Td largura={150} style={{ padding: "0 12px", fontSize: 11.5 }}>{c.unidade}</Td>
+                        <Td largura={170} style={{ padding: "0 12px", fontSize: 11.5 }}>{c.servico}</Td>
+                        <Td largura={120} style={{ padding: "0 12px", fontSize: 11.5, color: COLORS.steel }}>{c.tarefa}</Td>
+                        <Td titulo={c.statusParcela} style={{ padding: "0 12px" }}><Pill fg={sp.fg} bg={sp.bg}>{c.statusParcela}</Pill></Td>
                       </tr>
                     );
                   })}
@@ -5192,34 +5235,34 @@ function ServicosContratadosPage({ contratos, processos, onAddContrato, onExclui
                 const sp = statusParcelaStyle(val(c, "statusParcela"));
                 const proc = processoDoServico(c);
                 return (
-                  <tr key={c.id} style={{ borderBottom: `1px solid ${COLORS.border}` }}>
-                    {isAdmin && <td style={{ padding: "10px 16px" }}><input type="checkbox" checked={selecionados.has(c.id)} onChange={() => toggleSel(c.id)} /></td>}
-                    <td style={{ padding: "10px 16px", fontSize: 12, color: COLORS.steel, fontFamily: FONT_MONO }}>{c.proposta}</td>
-                    <td style={{ padding: "10px 16px", fontSize: 13, fontWeight: 600, color: COLORS.ice }}>{c.cliente}</td>
-                    <td style={{ padding: "10px 16px", fontSize: 12, color: COLORS.steel, fontFamily: FONT_MONO }}>{c.codigoLoja && c.codigoLoja !== "-" ? c.codigoLoja : "—"}</td>
-                    <td style={{ padding: "10px 16px", fontSize: 12.5, color: COLORS.steelLight }}>{c.unidade}</td>
-                    <td style={{ padding: "10px 16px", fontSize: 12.5, color: COLORS.steelLight, maxWidth: 220 }}>{c.servico}</td>
-                    <td style={{ padding: "10px 16px", fontSize: 12, color: COLORS.steel }}>{c.tarefa}</td>
-                    <td style={{ padding: "10px 16px", fontSize: 11.5, color: COLORS.steel, whiteSpace: "nowrap" }}>{c.tipo || "Processo"}</td>
-                    <td style={{ padding: "10px 16px" }}>
+                  <tr key={c.id} style={{ borderBottom: `1px solid ${COLORS.border}`, height: ALTURA_LINHA }}>
+                    {isAdmin && <Td style={{ width: 42 }}><input type="checkbox" checked={selecionados.has(c.id)} onChange={() => toggleSel(c.id)} /></Td>}
+                    <Td style={{ fontSize: 12, color: COLORS.steel, fontFamily: FONT_MONO }}>{c.proposta}</Td>
+                    <Td largura={190} style={{ fontSize: 13, fontWeight: 600, color: COLORS.ice }}>{c.cliente}</Td>
+                    <Td style={{ fontSize: 12, color: COLORS.steel, fontFamily: FONT_MONO }}>{c.codigoLoja && c.codigoLoja !== "-" ? c.codigoLoja : "—"}</Td>
+                    <Td largura={170}>{c.unidade}</Td>
+                    <Td largura={240}>{c.servico}</Td>
+                    <Td largura={130} style={{ fontSize: 12, color: COLORS.steel }}>{c.tarefa}</Td>
+                    <Td style={{ fontSize: 11.5, color: COLORS.steel }}>{c.tipo || "Processo"}</Td>
+                    <Td>
                       <CampoRascunho tipo="select" valor={TECNICOS_OPTIONS.includes(val(c, "tecnico")) ? val(c, "tecnico") : ""} opcoes={["", ...TECNICOS_OPTIONS]}
                         onChange={(v) => onEdit(c.id, "tecnico", v)} largura={110} pendente={pend(c, "tecnico")} />
-                    </td>
-                    <td style={{ padding: "10px 16px" }}>
+                    </Td>
+                    <Td>
                       <CampoRascunho tipo="date" valor={val(c, "dataSLA")} onChange={(v) => onEdit(c.id, "dataSLA", v)} largura={130} pendente={pend(c, "dataSLA")} />
-                    </td>
-                    <td style={{ padding: "10px 16px" }}>
+                    </Td>
+                    <Td>
                       <CampoRascunho tipo="select" valor={val(c, "statusParcela")} opcoes={STATUS_PARCELA_OPTIONS}
                         onChange={(v) => onEdit(c.id, "statusParcela", v)} corTexto={sp.fg} largura={150} pendente={pend(c, "statusParcela")} />
-                    </td>
-                    <td style={{ padding: "10px 16px", fontSize: 12, color: COLORS.steel, whiteSpace: "nowrap" }}>{proc ? fmtDate(proc.dataInicio) : "—"}</td>
-                    <td style={{ padding: "10px 16px", fontSize: 12, color: COLORS.steel, whiteSpace: "nowrap" }}>{proc ? fmtDate(proc.dataConclusao) : "—"}</td>
-                    <td style={{ padding: "10px 16px" }}>
+                    </Td>
+                    <Td style={{ fontSize: 12, color: COLORS.steel, fontFamily: FONT_MONO }}>{proc ? fmtDate(proc.dataInicio) : "—"}</Td>
+                    <Td style={{ fontSize: 12, color: COLORS.steel, fontFamily: FONT_MONO }}>{proc ? fmtDate(proc.dataConclusao) : "—"}</Td>
+                    <Td style={{ width: 60 }}>
                       <button onClick={() => onOpenServico(c.cliente, c.unidade, c.proposta, c.servico)} title="Abrir este serviço"
-                        style={{ background: "transparent", border: `1px solid ${COLORS.border}`, borderRadius: 6, width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+                        style={{ background: "transparent", border: `1px solid ${COLORS.border}`, borderRadius: 6, width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
                         <FileSignature size={13} color={COLORS.steelLight} />
                       </button>
-                    </td>
+                    </Td>
                   </tr>
                 );
               })}
@@ -5630,7 +5673,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
 
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
       {/* SIDEBAR */}
-      <aside style={{ width: 230, background: MENU.fundo, borderRight: `1px solid ${COLORS.border}`, padding: "22px 16px", flexShrink: 0 }}>
+      <aside style={{ width: LARGURA_MENU, background: MENU.fundo, borderRight: `1px solid ${COLORS.border}`, padding: "22px 16px", flexShrink: 0 }}>
         <div style={{ marginBottom: 22 }}>
           {logoBase64 && <img src={logoBase64} alt="Logo" style={{ maxHeight: LOGO_ALTURA_TELA, maxWidth: "100%", objectFit: "contain", marginBottom: 10, display: "block" }} />}
           <div style={{ fontFamily: FONT_TITULO, fontWeight: 700, fontSize: 15, color: MENU.titulo, letterSpacing: "0.01em", textTransform: "uppercase" }}>Controle de Processos e Serviços</div>
@@ -5940,32 +5983,32 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
                       const bloqueio = processoBloqueado(p, processos);
                       const aguardandoInicioRow = p.statusAtual === "aguardando";
                       return (
-                        <tr key={p.id} className="row-hover" style={{ cursor: "pointer" }} onClick={() => setSelected(p)}>
-                          {isAdmin && <td style={{ padding: "11px 16px", borderBottom: `1px solid ${COLORS.border}` }} onClick={(e) => e.stopPropagation()}>
-                            <input type="checkbox" checked={processosSelecionados.has(p.id)} onChange={() => setProcessosSelecionados((s) => { const n = new Set(s); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n; })} />
-                          </td>}
-                          <td style={{ padding: "11px 16px", borderBottom: `1px solid ${COLORS.border}` }}>
-                            <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.ice, display: "flex", alignItems: "center", gap: 6 }}><Building2 size={12} color={COLORS.steel} />{p.cliente}</div>
-                          </td>
-                          <td style={{ padding: "11px 16px", fontSize: 12, color: COLORS.steel, borderBottom: `1px solid ${COLORS.border}`, fontFamily: FONT_MONO }}>{codigosUnidade[`${p.cliente}|${p.unidade}`] || "—"}</td>
-                          <td style={{ padding: "11px 16px", fontSize: 12.5, color: COLORS.steelLight, borderBottom: `1px solid ${COLORS.border}` }}>{p.unidade}</td>
-                          <td style={{ padding: "11px 16px", fontSize: 12.5, color: COLORS.steelLight, borderBottom: `1px solid ${COLORS.border}`, maxWidth: 220 }}>
-                            {p.assunto}{bloqueio && <Lock size={11} color={COLORS.red} style={{ marginLeft: 6, verticalAlign: "middle" }} />}
-                          </td>
-                          <td style={{ padding: "11px 16px", fontSize: 11.5, color: COLORS.steel, borderBottom: `1px solid ${COLORS.border}`, whiteSpace: "nowrap" }}>{p.tipo}</td>
-                          <td style={{ padding: "11px 16px", fontSize: 11.5, color: COLORS.steelLight, borderBottom: `1px solid ${COLORS.border}`, whiteSpace: "nowrap" }}>{p.tecnico}</td>
-                          <td style={{ padding: "11px 16px", fontSize: 12, color: COLORS.steel, borderBottom: `1px solid ${COLORS.border}`, fontFamily: FONT_MONO }}>{p.numero}</td>
-                          <td style={{ padding: "11px 16px", borderBottom: `1px solid ${COLORS.border}` }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                              <Pill fg={st.fg} bg={st.bg} stamp>{statusLabel(p.statusAtual, p.tipo)}</Pill>
-                              {aguardandoInicioRow && <span title="Lembrete: iniciar serviço" style={{ width: 7, height: 7, borderRadius: "50%", background: COLORS.red, display: "inline-block" }} />}
-                            </div>
-                          </td>
-                          <td style={{ padding: "11px 16px", fontSize: 12, color: COLORS.steel, borderBottom: `1px solid ${COLORS.border}` }}>{fmtDate(p.dataProtocolo)}</td>
-                          <td style={{ padding: "11px 16px", fontSize: 12, color: COLORS.steel, borderBottom: `1px solid ${COLORS.border}` }}>{fmtDate(p.dataPrevisaoOrgao)}</td>
-                          <td style={{ padding: "11px 16px", borderBottom: `1px solid ${COLORS.border}` }}><Pill fg={prazo.fg} bg={prazo.bg}>{prazo.label}</Pill></td>
-                          <td style={{ padding: "11px 16px", fontSize: 12, borderBottom: `1px solid ${COLORS.border}`, color: ds !== null && ds > 15 ? COLORS.red : COLORS.steel }}>{ds !== null ? `há ${ds}d` : "—"}</td>
-                          <td style={{ padding: "11px 16px", borderBottom: `1px solid ${COLORS.border}` }}><ChevronRight size={15} color={COLORS.steel} /></td>
+                        <tr key={p.id} className="row-hover" style={{ cursor: "pointer", height: ALTURA_LINHA }} onClick={() => setSelected(p)}>
+                          {isAdmin && (
+                            <Td style={{ width: 42 }} onClick={(e) => e.stopPropagation()}>
+                              <input type="checkbox" checked={processosSelecionados.has(p.id)} onChange={() => setProcessosSelecionados((s) => { const n = new Set(s); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n; })} />
+                            </Td>
+                          )}
+                          <Td titulo={p.cliente} largura={210} style={{ fontSize: 13, fontWeight: 600, color: COLORS.ice }}>
+                            <Building2 size={12} color={COLORS.steel} style={{ verticalAlign: "-2px", marginRight: 6 }} />{p.cliente}
+                          </Td>
+                          <Td style={{ fontSize: 12, color: COLORS.steel, fontFamily: FONT_MONO }}>{codigosUnidade[`${p.cliente}|${p.unidade}`] || "—"}</Td>
+                          <Td largura={180}>{p.unidade}</Td>
+                          <Td titulo={p.assunto} largura={260}>
+                            {bloqueio && <Lock size={11} color={COLORS.red} style={{ verticalAlign: "-1px", marginRight: 5 }} />}{p.assunto}
+                          </Td>
+                          <Td style={{ fontSize: 11.5, color: COLORS.steel }}>{p.tipo}</Td>
+                          <Td largura={130} style={{ fontSize: 11.5 }}>{p.tecnico}</Td>
+                          <Td largura={130} style={{ fontSize: 12, color: COLORS.steel, fontFamily: FONT_MONO }}>{p.numero}</Td>
+                          <Td titulo={statusLabel(p.statusAtual, p.tipo)}>
+                            <Pill fg={st.fg} bg={st.bg} stamp>{statusLabel(p.statusAtual, p.tipo)}</Pill>
+                            {aguardandoInicioRow && <span title="Lembrete: iniciar serviço" style={{ width: 7, height: 7, borderRadius: "50%", background: COLORS.red, display: "inline-block", marginLeft: 6 }} />}
+                          </Td>
+                          <Td style={{ fontSize: 12, color: COLORS.steel, fontFamily: FONT_MONO }}>{fmtDate(p.dataProtocolo)}</Td>
+                          <Td style={{ fontSize: 12, color: COLORS.steel, fontFamily: FONT_MONO }}>{fmtDate(p.dataPrevisaoOrgao)}</Td>
+                          <Td titulo={prazo.label}><Pill fg={prazo.fg} bg={prazo.bg}>{prazo.label}</Pill></Td>
+                          <Td style={{ fontSize: 12, fontFamily: FONT_MONO, color: ds !== null && ds > 15 ? CHART.destaque : COLORS.steel }}>{ds !== null ? `há ${ds}d` : "—"}</Td>
+                          <Td style={{ width: 40 }}><ChevronRight size={15} color={COLORS.steel} /></Td>
                         </tr>
                       );
                     })}
