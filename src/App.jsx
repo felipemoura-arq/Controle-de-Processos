@@ -167,9 +167,9 @@ function sincronizarCoresSemanticas() {
   const porGrupo = {
     aguardando: CHART.pendente, iniciado: CHART.andamento, montagem: CHART.suspenso,
     analise: CHART.andamento, exigencia: CHART.suspenso, concluido: CHART.concluido,
-    indeferido: CHART.destaque, cancelado: CHART.pendente,
+    indeferido: CHART.destaque, cancelado: CHART.pendente, dependencia: CHART.destaque,
   };
-  Object.values(STATUS_CONFIG).forEach((cfgSt) => {
+  [...Object.values(STATUS_CONFIG), STATUS_DEPENDENCIA].forEach((cfgSt) => {
     const cor = porGrupo[cfgSt.grupo] || CHART.pendente;
     cfgSt.fg = cor; cfgSt.bg = dim(cor);
   });
@@ -460,10 +460,58 @@ function novoResponsavelTecnico() {
    ============================================================ */
 function processoBloqueado(processo, todosProcessos) {
   if (!processo.dependeDeId) return null;
-  const dep = todosProcessos.find((p) => p.id === processo.dependeDeId);
+  const dep = (todosProcessos || []).find((p) => p.id === processo.dependeDeId);
   if (!dep) return null;
   return STATUS_CONFIG[dep.statusAtual].final ? null : dep;
 }
+
+/* ------------------------------------------------------------------
+   STATUS "DEPENDÊNCIA DE OUTRO PROCESSO"
+   Não é um status que se escolhe na mão: ele é DERIVADO. Enquanto o
+   processo do qual este depende não estiver concluído, ele aparece
+   como "Dependência de outro processo" em TODAS as telas, gráficos,
+   KPIs e relatórios — mesmo que já tenha sido iniciado. O status real
+   continua guardado no banco e volta a aparecer sozinho assim que a
+   dependência é concluída. Processos já finalizados (concluído,
+   indeferido, cancelado) mantêm o próprio status.
+   ------------------------------------------------------------------ */
+const STATUS_DEPENDENCIA = {
+  label: "Dependência de outro processo",
+  labelServico: "Dependência de outro serviço",
+  responsavel: "Primers",
+  fg: COLORS.red, bg: COLORS.redDim, final: false, grupo: "dependencia",
+};
+/* Registro global dos processos travados, recalculado a cada render da
+   tela principal. Assim qualquer componente, gráfico ou relatório sabe
+   do bloqueio sem precisar receber a lista inteira de processos. */
+let PROCESSOS_BLOQUEADOS = new Set();
+function registrarBloqueios(processos) {
+  const s = new Set();
+  (processos || []).forEach((p) => { if (processoBloqueado(p, processos)) s.add(p.id); });
+  PROCESSOS_BLOQUEADOS = s;
+  return s;
+}
+function statusEfetivo(p) {
+  if (!p) return null;
+  const cfg = STATUS_CONFIG[p.statusAtual];
+  if (cfg && cfg.final) return p.statusAtual;
+  return PROCESSOS_BLOQUEADOS.has(p.id) ? "dependencia" : p.statusAtual;
+}
+function statusCfg(chave) { return chave === "dependencia" ? STATUS_DEPENDENCIA : STATUS_CONFIG[chave]; }
+function statusInfoDe(p) { return statusCfg(statusEfetivo(p)) || STATUS_CONFIG.aguardando; }
+function statusLabelDe(p) {
+  const cfg = statusInfoDe(p);
+  return (p && p.tipo === "Serviço Técnico" && cfg.labelServico) ? cfg.labelServico : cfg.label;
+}
+
+/* ------------------------------------------------------------------
+   NÚMERO UNIFICADO
+   "Nº do processo" e "Nº do protocolo" viraram UM campo só na tela e
+   nos relatórios. O banco continua com as duas colunas (nada é
+   perdido); quando existe protocolo, é ele que vale.
+   ------------------------------------------------------------------ */
+function valorReal(v) { return v && v !== "-" ? String(v) : ""; }
+function numeroUnificado(p) { return valorReal(p && p.numeroProtocolo) || valorReal(p && p.numero) || ""; }
 function mesLabel(iso) {
   if (!iso) return null;
   const [y, m] = iso.split("-");
@@ -709,7 +757,7 @@ function gerarRelatorioHTML(processo) {
     .pend{margin:4px 0;font-size:12.5px;} .meta{font-size:12px;color:#555;margin-top:4px;}
   </style></head><body>
   <h1>Relatório de conformidade — ${processo.assunto}</h1>
-  <div class="meta">${processo.cliente} — ${rotuloUnidade(processo.unidade, codigoUnidadeGlobal(processo.cliente, processo.unidade))} · ${processo.cidade}/${processo.uf} · ${processo.tipo === "Serviço Técnico" ? "Serviço" : "Processo"} nº ${processo.numero}</div>
+  <div class="meta">${processo.cliente} — ${rotuloUnidade(processo.unidade, codigoUnidadeGlobal(processo.cliente, processo.unidade))} · ${processo.cidade}/${processo.uf} · ${processo.tipo === "Serviço Técnico" ? "Serviço" : "Processo"} nº ${numeroUnificado(processo) || "—"}</div>
   <div class="meta">Gerado em ${fmtDate(new Date().toISOString().slice(0,10))}</div>
   <p style="margin-top:16px;">
     <span class="badge ${pronto ? "ok" : "warn"}">${pronto ? "Pronto para protocolo" : `${pendencias.length} pendência(s) para protocolo`}</span>
@@ -1208,7 +1256,7 @@ function applyFiltros(processos, filtros) {
     if (filtros.cliente.length && !filtros.cliente.includes(p.cliente)) return false;
     if (filtros.unidade.length && !filtros.unidade.includes(p.unidade)) return false;
     if (filtros.assunto.length && !filtros.assunto.includes(p.assunto)) return false;
-    if (filtros.responsavel.length && !filtros.responsavel.includes(STATUS_CONFIG[p.statusAtual].responsavel)) return false;
+    if (filtros.responsavel.length && !filtros.responsavel.includes(statusInfoDe(p).responsavel)) return false;
     return true;
   });
 }
@@ -1256,17 +1304,17 @@ function NewProcessModal({ onClose, onSave, processos, isAdmin }) {
           {field("UF", "uf", "Ex: SP")}
           <div style={{ gridColumn: "1 / -1" }}>{field("Assunto / Serviço", "assunto", "Ex: Aprovação de Projeto - Prefeitura (Obra Nova)")}</div>
           {selectField("Tipo de serviço", "tipo", CONTRATO_TIPO_OPTIONS)}
-          {field("Nº do processo", "numero", "Ex: 1101.2025/0001")}
+          {field("Nº do processo / protocolo", "numero", "Ex: 1101.2025/0001")}
           <div style={{ gridColumn: "1 / -1" }}>{selectField("Status atual (responsabilidade)", "statusAtual", STATUS_KEYS, (k) => `${statusLabel(k, form.tipo)} — ${rotuloResponsavel(STATUS_CONFIG[k].responsavel)}`)}</div>
           {field("Data de protocolo", "dataProtocolo", "", "date")}
           {field("Previsão de análise do órgão", "dataPrevisaoOrgao", "", "date")}
           {field("Data de atendimento de exigência", "dataAtendimentoExigencia", "", "date")}
           {field("Pendência do cliente (se houver)", "pendenciaClienteDescricao", "Ex: aguardando envio de documento X")}
-          {field("Site do órgão", "site", "portal.orgao.gov.br")}
-          {field("Prestador responsável", "prestador", "Interno / nome")}
-          {field("Login", "login", "usuário do portal")}
-          {field("Senha", "senha", "senha do portal", "password")}
           {field("Nº do contrato", "numeroContrato", "Ex: CT-2026-0001")}
+          <div style={{ gridColumn: "1 / -1", fontSize: 11.5, color: COLORS.steel, background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 7, padding: "9px 11px", lineHeight: 1.5 }}>
+            O site do órgão, o login, a senha e o prestador/fornecedor são informados na ocorrência
+            correspondente (Início do serviço e Protocolo do processo), dentro do próprio serviço.
+          </div>
           <div style={{ gridColumn: "1 / -1" }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
               <label style={{ fontSize: 11, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}>Depende da conclusão de outro processo? (opcional)</label>
@@ -1489,7 +1537,7 @@ function RelatorioTab({ processo }) {
     (processo.checklist.itens || []).forEach((it) => {
       rows.push(["Checklist", it.item, it.status, ""]);
     });
-    downloadCSV(`relatorio_${processo.cliente}_${processo.numero}.csv`.replace(/[^\w.-]+/g, "_"), rows);
+    downloadCSV(`relatorio_${processo.cliente}_${numeroUnificado(processo) || "sem-numero"}.csv`.replace(/[^\w.-]+/g, "_"), rows);
   };
 
   return (
@@ -1627,6 +1675,7 @@ const OCORRENCIA_TIPOS = [
     campos: [
       { key: "dataInicio", label: "Data de início", type: "date", padrao: "hoje" },
       { key: "dataPrevisaoAnaliseChecklist", label: "Previsão de conclusão da análise documental / checklist", type: "date" },
+      { key: "prestador", label: "Prestador / Fornecedor (se houver)", type: "text" },
     ],
   },
   {
@@ -1640,13 +1689,22 @@ const OCORRENCIA_TIPOS = [
     id: "protocolo", label: "Protocolo do processo", statusDestino: "protocolado", soProcesso: true,
     campos: [
       { key: "dataProtocolo", label: "Data de protocolo", type: "date", padrao: "hoje" },
-      { key: "numeroProtocolo", label: "Número do protocolo", type: "text" },
+      { key: "numeroProtocolo", label: "Nº do processo / protocolo", type: "text" },
       { key: "dataPrevisaoOrgao", label: "Previsão de análise do órgão", type: "date" },
+      /* Acesso ao portal do órgão: só existe a partir do protocolo.
+         "sigiloso" mantém esses campos fora do resumo da ocorrência e,
+         por consequência, fora de qualquer relatório exportado. */
+      { key: "site", label: "Site do órgão", type: "text", sigiloso: true },
+      { key: "login", label: "Login do portal", type: "text", sigiloso: true },
+      { key: "senha", label: "Senha do portal", type: "password", sigiloso: true },
     ],
   },
   {
     id: "execucao", label: "Início da execução do serviço técnico", statusDestino: "protocolado", soTecnico: true,
-    campos: [{ key: "dataPrevisaoOrgao", label: "Previsão de conclusão / entrega", type: "date" }],
+    campos: [
+      { key: "dataPrevisaoOrgao", label: "Previsão de conclusão / entrega", type: "date" },
+      { key: "prestador", label: "Prestador / Fornecedor (se houver)", type: "text" },
+    ],
   },
   { id: "tramitacao", label: "Tramitação / Movimentação processual", statusDestino: null, campos: [] },
   { id: "cobranca", label: "Cobrança de celeridade ao órgão", statusDestino: null, campos: [], registraCobranca: true },
@@ -1737,7 +1795,8 @@ function RegistrarOcorrenciaModal({ processo, onClose, onSalvar, tipoInicial, em
     if (editando && !tipoTocado) return;
     const iniciais = {};
     camposDoTipo(tipoCfg, processo).forEach((c) => {
-      iniciais[c.key] = processo[c.key] || (c.padrao === "hoje" ? hojeISOStr() : "");
+      const atual = processo[c.key];
+      iniciais[c.key] = (atual && atual !== "-") ? atual : (c.padrao === "hoje" ? hojeISOStr() : "");
     });
     setValores(iniciais);
   }, [tipoId]); // eslint-disable-line
@@ -1746,8 +1805,11 @@ function RegistrarOcorrenciaModal({ processo, onClose, onSalvar, tipoInicial, em
 
   const registrar = () => {
     if (!descricao.trim()) return;
+    /* Campos marcados como sigilosos (site, login e senha do portal)
+       ficam FORA do resumo — o resumo é o que aparece no histórico e
+       pode ir para o relatório enviado ao cliente. */
     const resumo = campos
-      .filter((c) => valores[c.key])
+      .filter((c) => valores[c.key] && !c.sigiloso)
       .map((c) => `${c.label}: ${c.type === "date" ? fmtDate(valores[c.key]) : valores[c.key]}`)
       .join(" · ");
     const camposAplicados = {};
@@ -1770,6 +1832,9 @@ function RegistrarOcorrenciaModal({ processo, onClose, onSalvar, tipoInicial, em
     const camposProcesso = {};
     if (!editando || reaplicar) {
       Object.assign(camposProcesso, camposAplicados);
+      /* Nº do processo e nº do protocolo são um campo só: o que for
+         digitado aqui passa a valer para os dois. */
+      if (camposProcesso.numeroProtocolo) camposProcesso.numero = camposProcesso.numeroProtocolo;
       if (tipoCfg.statusDestino) camposProcesso.statusAtual = tipoCfg.statusDestino;
       if (tipoCfg.pendenciaCliente) {
         camposProcesso.pendenciaCliente = { ativa: true, descricao: descricao.trim(), previsaoRetorno: previsaoRetorno || "" };
@@ -1829,14 +1894,33 @@ function RegistrarOcorrenciaModal({ processo, onClose, onSalvar, tipoInicial, em
         <div style={{ background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 14, marginBottom: 14 }}>
           <div style={{ fontSize: 10.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 700, marginBottom: 10 }}>Dados desta etapa</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            {campos.map((c) => (
-              <div key={c.key} style={{ gridColumn: campos.length === 1 ? "1 / -1" : "auto" }}>
+            {campos.filter((c) => !c.sigiloso).map((c) => (
+              <div key={c.key} style={{ gridColumn: campos.filter((x) => !x.sigiloso).length === 1 ? "1 / -1" : "auto" }}>
                 <label style={labelCampo}>{c.label}</label>
                 <input type={c.type} value={valores[c.key] || ""} onChange={(e) => setValores((v) => ({ ...v, [c.key]: e.target.value }))}
                   style={{ ...inputBase, background: COLORS.panel }} />
               </div>
             ))}
           </div>
+          {campos.some((c) => c.sigiloso) && (
+            <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px dashed ${COLORS.border}` }}>
+              <div style={{ fontSize: 10.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 700, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
+                <Lock size={11} /> Acesso ao portal do órgão
+              </div>
+              <div style={{ fontSize: 11, color: COLORS.steel, marginBottom: 10, lineHeight: 1.5 }}>
+                Uso interno. Estes dados NÃO saem em nenhum relatório exportado nem no histórico enviado ao cliente.
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                {campos.filter((c) => c.sigiloso).map((c) => (
+                  <div key={c.key} style={{ gridColumn: c.key === "site" ? "1 / -1" : "auto" }}>
+                    <label style={labelCampo}>{c.label}</label>
+                    <input type={c.type} autoComplete="off" value={valores[c.key] || ""} onChange={(e) => setValores((v) => ({ ...v, [c.key]: e.target.value }))}
+                      style={{ ...inputBase, background: COLORS.panel }} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -2028,7 +2112,7 @@ function abrirEImprimir(html) {
 }
 
 function gerarStatusServicoHTML(processo) {
-  const status = STATUS_CONFIG[processo.statusAtual];
+  const status = statusInfoDe(processo);
   const atualizacoes = processo.atualizacoes.filter((a) => a.incluirRelatorio !== false).sort((a, b) => b.data.localeCompare(a.data));
   const linhas = atualizacoes.map((a) => `<tr><td>${fmtDate(a.data)}</td><td>${a.tipo}</td><td>${rotuloResponsavel(a.responsavel)}</td><td>${a.descricao}</td></tr>`).join("");
   /* O selo de prazo ("No prazo" / "Atrasado") NÃO sai no relatório
@@ -2041,10 +2125,9 @@ function gerarStatusServicoHTML(processo) {
       <div class="kv">Código da unidade<b>${codigoUnidadeGlobal(processo.cliente, processo.unidade) || "—"}</b></div>
       <div class="kv">Serviço<b>${processo.assunto}</b></div>
       <div class="kv">Tipo<b>${processo.tipo}</b></div>
-      <div class="kv">Status atual<b><span class="badge" style="background:${status.bg};color:${status.fg}">${statusLabel(processo.statusAtual, processo.tipo)}</span></b></div>
-      <div class="kv">Nº do processo<b>${processo.numero}</b></div>
+      <div class="kv">Status atual<b><span class="badge" style="background:${status.bg};color:${status.fg}">${statusLabelDe(processo)}</span></b></div>
+      <div class="kv">Nº do processo / protocolo<b>${numeroUnificado(processo) || "—"}</b></div>
       <div class="kv">Data de protocolo<b>${fmtDate(processo.dataProtocolo)}</b></div>
-      <div class="kv">Nº do protocolo<b>${processo.numeroProtocolo && processo.numeroProtocolo !== "-" ? processo.numeroProtocolo : "—"}</b></div>
       <div class="kv">Previsão de análise do órgão<b>${fmtDate(processo.dataPrevisaoOrgao)}</b></div>
       <div class="kv">Data de conclusão<b>${fmtDate(processo.dataConclusao)}</b></div>
     </div>
@@ -2075,10 +2158,10 @@ function imprimirLinhaDoTempo(processo) { abrirEImprimir(gerarLinhaDoTempoHTML(p
 
 function gerarStatusServicoGeralHTML(processos, tituloCliente) {
   const linhas = processos.map((p) => {
-    const st = STATUS_CONFIG[p.statusAtual];
+    const st = statusInfoDe(p);
     const ultima = [...p.atualizacoes].filter((a) => a.incluirRelatorio !== false).sort((a, b) => b.data.localeCompare(a.data))[0];
     return `<tr><td>${p.cliente}</td><td>${codigoUnidadeGlobal(p.cliente, p.unidade) || "—"}</td><td>${p.unidade}</td><td>${p.assunto}</td><td>${p.tipo}</td>
-      <td><span class="badge" style="background:${st.bg};color:${st.fg}">${statusLabel(p.statusAtual, p.tipo)}</span></td>
+      <td><span class="badge" style="background:${st.bg};color:${st.fg}">${statusLabelDe(p)}</span></td>
       <td>${fmtDate(p.ultimaAtualizacao)}</td><td>${ultima ? ultima.descricao : "—"}</td></tr>`;
   }).join("");
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Status de Serviço${tituloCliente ? " — " + tituloCliente : ""}</title><style>${printBrandCSS()}</style></head><body>
@@ -2138,6 +2221,25 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
   const temParcelaFinal = parcelasDoServico.length === 0 || parcelasDoServico.some((c) => /deferiment|entrega|obten/i.test(c.tarefa || ""));
   const iniciado = processo.statusAtual !== "aguardando";
 
+  /* ----------------------------------------------------------------
+     O QUE APARECE NA VISÃO GERAL
+     Regra: um campo só aparece depois que a ocorrência que o preenche
+     foi registrada — ou se ele já tem conteúdo (dados vindos da
+     planilha, por exemplo). Assim a aba deixa de ser uma lista de
+     campos vazios e passa a refletir o que realmente aconteceu.
+     O link "Mostrar todos os campos" abre tudo, para correções.
+     ---------------------------------------------------------------- */
+  const tiposRegistrados = useMemo(
+    () => new Set((processo.atualizacoes || []).map((a) => a.tipoOcorrencia).filter(Boolean)),
+    [processo.atualizacoes]
+  );
+  const [mostrarTudo, setMostrarTudo] = useState(false);
+  const temConteudo = (...chaves) => chaves.some((k) => {
+    const v = processo[k];
+    return v !== undefined && v !== null && v !== "" && v !== "-";
+  });
+  const visivel = (tipos, ...chaves) =>
+    mostrarTudo || temConteudo(...chaves) || (tipos || []).some((t) => tiposRegistrados.has(t));
   const patch = (fields) => onUpdate({ ...processo, ...fields });
 
   /* Uma ocorrência entra no rascunho junto com os campos do processo
@@ -2218,13 +2320,14 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
               style={{ background: status.bg, color: status.fg, border: `1px solid ${status.fg}55`, borderRadius: 999, padding: "4px 10px", fontSize: 11, fontWeight: 700, fontFamily: FONT_TITULO, letterSpacing: "0.03em" }}>
               {STATUS_KEYS.map((k) => <option key={k} value={k} style={{ background: COLORS.panel, color: COLORS.ice }}>{statusLabel(k, processo.tipo)}</option>)}
             </select>
+            {bloqueadoPor && <span style={{ fontSize: 10.5, color: COLORS.steel, fontStyle: "italic" }}>status interno — nas listagens e gráficos aparece como dependência</span>}
             <Pill fg={COLORS.steelLight} bg="rgba(255,255,255,0.06)">{processo.tipo}</Pill>
             {iniciado && <Pill fg={prazo.fg} bg={prazo.bg}>{prazo.label}</Pill>}
             {iniciado && parado !== null && <Pill fg={parado > 15 ? COLORS.red : COLORS.steel} bg={parado > 15 ? COLORS.redDim : "rgba(255,255,255,0.05)"}>{parado > 15 ? `Parado há ${parado}d` : `Atualizado há ${parado}d`}</Pill>}
             {iniciado && <Pill fg={checklistProgress(processo.checklist) === 100 ? COLORS.green : COLORS.steelLight} bg="rgba(255,255,255,0.06)">Checklist {checklistProgress(processo.checklist)}%</Pill>}
             {iniciado && <Pill fg={documentosProgress(processo.documentos) === 100 ? COLORS.green : COLORS.steelLight} bg="rgba(255,255,255,0.06)">Documentos {documentosProgress(processo.documentos)}%</Pill>}
             {processo.pendenciaCliente.ativa && <Pill fg={COLORS.yellow} bg={COLORS.yellowDim}>Pendência do cliente</Pill>}
-            {bloqueadoPor && <Pill fg={COLORS.red} bg={COLORS.redDim}>Bloqueado por outro processo</Pill>}
+            {bloqueadoPor && <Pill fg={STATUS_DEPENDENCIA.fg} bg={STATUS_DEPENDENCIA.bg}>{processo.tipo === "Serviço Técnico" ? STATUS_DEPENDENCIA.labelServico : STATUS_DEPENDENCIA.label}</Pill>}
           </div>
 
           {iniciado && (
@@ -2283,6 +2386,18 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
           )}
 
           {iniciado && tab === "geral" && (
+            <>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 11.5, color: COLORS.steel, fontStyle: "italic" }}>
+                {mostrarTudo
+                  ? "Mostrando todos os campos, inclusive os que ainda não foram preenchidos por nenhuma ocorrência."
+                  : "Os campos aparecem conforme as ocorrências vão sendo registradas."}
+              </div>
+              <button onClick={() => setMostrarTudo((v) => !v)}
+                style={{ background: "transparent", border: `1px solid ${COLORS.border}`, color: COLORS.steelLight, borderRadius: 6, padding: "5px 11px", fontSize: 11.5, cursor: "pointer" }}>
+                {mostrarTudo ? "Mostrar só o que já foi registrado" : "Mostrar todos os campos"}
+              </button>
+            </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(400px, 1fr))", gap: "0 34px", alignItems: "start" }}>
               <div>
               <Row label="Cliente" value={processo.cliente} />
@@ -2292,66 +2407,103 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
               <Row label="Tipo de serviço" value={processo.tipo} />
               <Row label="Técnico" value={processo.tecnico} />
 
-              <RowEditavel label="Data de início" tipo="date" valor={processo.dataInicio} onConfirmar={(v) => patch({ dataInicio: v })} />
+              {visivel(["inicio"], "dataInicio") && (
+                <RowEditavel label="Data de início" tipo="date" valor={processo.dataInicio} onConfirmar={(v) => patch({ dataInicio: v })} />
+              )}
 
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${COLORS.border}` }}>
-                <span style={{ fontSize: 12, color: COLORS.steel }}>Vistoria necessária?</span>
-                <div style={{ display: "flex", gap: 6 }}>
-                  {[[true, "Sim"], [false, "Não"]].map(([v, l]) => (
-                    <button key={l} onClick={() => patch({ vistoriaNecessaria: v })} style={{
-                      fontSize: 11, fontWeight: 700, borderRadius: 999, padding: "4px 12px", cursor: "pointer",
-                      background: processo.vistoriaNecessaria === v ? COLORS.redDim : "transparent",
-                      color: processo.vistoriaNecessaria === v ? COLORS.red : COLORS.steel,
-                      border: `1px solid ${processo.vistoriaNecessaria === v ? COLORS.red + "55" : COLORS.border}`,
-                    }}>{l}</button>
-                  ))}
-                </div>
-              </div>
-              {processo.vistoriaNecessaria && <RowEditavel label="Data de vistoria" tipo="date" valor={processo.dataPrevistaVistoria} onConfirmar={(v) => patch({ dataPrevistaVistoria: v })} />}
-
-              {processo.tipo === "Serviço Técnico" ? (
-                <RowEditavel label="Previsão de conclusão / entrega" tipo="date" valor={processo.dataPrevisaoOrgao} onConfirmar={(v) => patch({ dataPrevisaoOrgao: v })} />
-              ) : (
+              {(mostrarTudo || processo.vistoriaNecessaria !== null && processo.vistoriaNecessaria !== undefined || tiposRegistrados.has("vistoria") || temConteudo("dataPrevistaVistoria")) && (
                 <>
-                  <RowEditavel label="Nº do processo" tipo="text" valor={processo.numero === "-" ? "" : processo.numero} onConfirmar={(v) => patch({ numero: v })} />
-                  <RowEditavel label="Previsão de análise/checklist" tipo="date" valor={processo.dataPrevisaoAnaliseChecklist} onConfirmar={(v) => patch({ dataPrevisaoAnaliseChecklist: v })} />
-                  <RowEditavel label="Data prevista de protocolo" tipo="date" valor={processo.dataPrevistaProtocolo} onConfirmar={(v) => patch({ dataPrevistaProtocolo: v })} />
-                  <RowEditavel label="Data de protocolo" tipo="date" valor={processo.dataProtocolo} onConfirmar={(v) => patch({ dataProtocolo: v })} />
-                  <RowEditavel label="Nº do protocolo" tipo="text" valor={processo.numeroProtocolo === "-" ? "" : processo.numeroProtocolo} onConfirmar={(v) => patch({ numeroProtocolo: v })} />
-                  <RowEditavel label="Previsão de análise do órgão / conclusão" tipo="date" valor={processo.dataPrevisaoOrgao} onConfirmar={(v) => patch({ dataPrevisaoOrgao: v })} />
-                  <RowEditavel label="Exigência recebida" tipo="date" valor={processo.dataExigenciaRecebida} onConfirmar={(v) => patch({ dataExigenciaRecebida: v })} />
-                  <RowEditavel label="Prazo limite para atendimento" tipo="date" valor={processo.dataExigenciaPrazoLimite} onConfirmar={(v) => patch({ dataExigenciaPrazoLimite: v })} />
-                  <RowEditavel label="Atendimento técnico" tipo="date" valor={processo.dataAtendimentoTecnico} onConfirmar={(v) => patch({ dataAtendimentoTecnico: v })} />
-                  <RowEditavel label="Exigência atendida" tipo="date" valor={processo.dataAtendimentoExigencia} onConfirmar={(v) => patch({ dataAtendimentoExigencia: v })} />
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${COLORS.border}` }}>
+                    <span style={{ fontSize: 12, color: COLORS.steel }}>Vistoria necessária?</span>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {[[true, "Sim"], [false, "Não"]].map(([v, l]) => (
+                        <button key={l} onClick={() => patch({ vistoriaNecessaria: v })} style={{
+                          fontSize: 11, fontWeight: 700, borderRadius: 999, padding: "4px 12px", cursor: "pointer",
+                          background: processo.vistoriaNecessaria === v ? COLORS.redDim : "transparent",
+                          color: processo.vistoriaNecessaria === v ? COLORS.red : COLORS.steel,
+                          border: `1px solid ${processo.vistoriaNecessaria === v ? COLORS.red + "55" : COLORS.border}`,
+                        }}>{l}</button>
+                      ))}
+                    </div>
+                  </div>
+                  {processo.vistoriaNecessaria && <RowEditavel label="Data de vistoria" tipo="date" valor={processo.dataPrevistaVistoria} onConfirmar={(v) => patch({ dataPrevistaVistoria: v })} />}
                 </>
               )}
 
-              <RowEditavel label="Data de conclusão" tipo="date" valor={processo.dataConclusao} onConfirmar={(v) => patch({ dataConclusao: v })} />
-              <RowEditavel label="Prestador / Fornecedor" tipo="text" valor={processo.prestador === "-" ? "" : processo.prestador} onConfirmar={(v) => patch({ prestador: v })} />
+              {/* Nº do processo e nº do protocolo são um campo só. Ao
+                  editar aqui, os dois campos do banco recebem o mesmo
+                  valor — é a unificação pedida. */}
+              {visivel(["protocolo", "execucao"], "numero", "numeroProtocolo") && (
+                <RowEditavel label="Nº do processo / protocolo" tipo="text" valor={numeroUnificado(processo)}
+                  onConfirmar={(v) => patch({ numero: v, numeroProtocolo: v })} />
+              )}
+
+              {processo.tipo === "Serviço Técnico" ? (
+                visivel(["execucao"], "dataPrevisaoOrgao") && (
+                  <RowEditavel label="Previsão de conclusão / entrega" tipo="date" valor={processo.dataPrevisaoOrgao} onConfirmar={(v) => patch({ dataPrevisaoOrgao: v })} />
+                )
+              ) : (
+                <>
+                  {visivel(["inicio"], "dataPrevisaoAnaliseChecklist") && (
+                    <RowEditavel label="Previsão de análise/checklist" tipo="date" valor={processo.dataPrevisaoAnaliseChecklist} onConfirmar={(v) => patch({ dataPrevisaoAnaliseChecklist: v })} />
+                  )}
+                  {visivel(["analise"], "dataPrevistaProtocolo") && (
+                    <RowEditavel label="Data prevista de protocolo" tipo="date" valor={processo.dataPrevistaProtocolo} onConfirmar={(v) => patch({ dataPrevistaProtocolo: v })} />
+                  )}
+                  {visivel(["protocolo"], "dataProtocolo") && (
+                    <RowEditavel label="Data de protocolo" tipo="date" valor={processo.dataProtocolo} onConfirmar={(v) => patch({ dataProtocolo: v })} />
+                  )}
+                  {visivel(["protocolo", "exigencia_atendida"], "dataPrevisaoOrgao") && (
+                    <RowEditavel label="Previsão de análise do órgão / conclusão" tipo="date" valor={processo.dataPrevisaoOrgao} onConfirmar={(v) => patch({ dataPrevisaoOrgao: v })} />
+                  )}
+                  {visivel(["exigencia_recebida"], "dataExigenciaRecebida", "dataExigenciaPrazoLimite") && (
+                    <>
+                      <RowEditavel label="Exigência recebida" tipo="date" valor={processo.dataExigenciaRecebida} onConfirmar={(v) => patch({ dataExigenciaRecebida: v })} />
+                      <RowEditavel label="Prazo limite para atendimento" tipo="date" valor={processo.dataExigenciaPrazoLimite} onConfirmar={(v) => patch({ dataExigenciaPrazoLimite: v })} />
+                    </>
+                  )}
+                  {visivel(["exigencia_atendida"], "dataAtendimentoTecnico", "dataAtendimentoExigencia") && (
+                    <>
+                      <RowEditavel label="Atendimento técnico" tipo="date" valor={processo.dataAtendimentoTecnico} onConfirmar={(v) => patch({ dataAtendimentoTecnico: v })} />
+                      <RowEditavel label="Exigência atendida" tipo="date" valor={processo.dataAtendimentoExigencia} onConfirmar={(v) => patch({ dataAtendimentoExigencia: v })} />
+                    </>
+                  )}
+                </>
+              )}
+
+              {visivel(["conclusao", "indeferimento"], "dataConclusao") && (
+                <RowEditavel label="Data de conclusão" tipo="date" valor={processo.dataConclusao} onConfirmar={(v) => patch({ dataConclusao: v })} />
+              )}
+              {visivel(["inicio", "execucao", "protocolo"], "prestador") && (
+                <RowEditavel label="Prestador / Fornecedor" tipo="text" valor={processo.prestador === "-" ? "" : processo.prestador} onConfirmar={(v) => patch({ prestador: v })} />
+              )}
               </div>
 
               <div>
-              <Row label="Site do órgão" value={processo.site || "—"} />
-              <Row label="Login" value={processo.login || "—"} />
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${COLORS.border}` }}>
-                <span style={{ fontSize: 12, color: COLORS.steel }}>Senha</span>
-                <button onClick={() => setShowSenha((s) => !s)} style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", cursor: processo.senha && processo.senha !== "-" ? "pointer" : "default", color: COLORS.ice, fontSize: 13, fontFamily: showSenha ? FONT_SANS : FONT_MONO }}>
-                  {processo.senha && processo.senha !== "-" ? (showSenha ? processo.senha : "••••••••••") : "—"}
-                  {processo.senha && processo.senha !== "-" && (showSenha ? <EyeOff size={14} color={COLORS.steel} /> : <Eye size={14} color={COLORS.steel} />)}
-                </button>
-              </div>
-
-              <div style={{ marginTop: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div style={{ fontSize: 11.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}>Cobranças de celeridade</div>
-                <button onClick={() => { setOcorrenciaEmEdicao(null); setShowOcorrencia(true); }} style={{ display: "flex", alignItems: "center", gap: 5, background: "transparent", border: `1px solid ${COLORS.border}`, color: COLORS.steelLight, borderRadius: 6, padding: "5px 10px", fontSize: 11.5, cursor: "pointer" }}>
-                  <Plus size={12} /> Registrar cobrança
-                </button>
-              </div>
-              {processo.cobrancas.length === 0 ? (
-                <div style={{ fontSize: 12, color: COLORS.steel, padding: "10px 0" }}>Nenhuma cobrança registrada. Use "Registrar ocorrência" com o tipo "Cobrança de celeridade ao órgão".</div>
-              ) : processo.cobrancas.map((c, i) => (
-                <div key={i} style={{ fontSize: 12, color: COLORS.steelLight, padding: "6px 0", borderBottom: `1px solid ${COLORS.border}` }}>{fmtDate(c.data)} — {c.nota}</div>
-              ))}
+              {/* Acesso ao portal do órgão — só existe a partir do
+                  protocolo, e nunca sai em relatório. */}
+              {visivel(["protocolo"], "site", "login", "senha") ? (
+                <>
+                  <div style={{ fontSize: 11.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
+                    <Lock size={12} /> Acesso ao portal do órgão
+                  </div>
+                  <div style={{ fontSize: 11, color: COLORS.steel, marginBottom: 6, fontStyle: "italic" }}>Uso interno — não sai em nenhum relatório exportado.</div>
+                  <RowEditavel label="Site do órgão" tipo="text" valor={processo.site === "-" ? "" : processo.site} onConfirmar={(v) => patch({ site: v })} />
+                  <RowEditavel label="Login" tipo="text" valor={processo.login === "-" ? "" : processo.login} onConfirmar={(v) => patch({ login: v })} />
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${COLORS.border}` }}>
+                    <span style={{ fontSize: 12, color: COLORS.steel }}>Senha</span>
+                    <button onClick={() => setShowSenha((s) => !s)} style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: "none", cursor: processo.senha && processo.senha !== "-" ? "pointer" : "default", color: COLORS.ice, fontSize: 13, fontFamily: showSenha ? FONT_SANS : FONT_MONO }}>
+                      {processo.senha && processo.senha !== "-" ? (showSenha ? processo.senha : "••••••••••") : "—"}
+                      {processo.senha && processo.senha !== "-" && (showSenha ? <EyeOff size={14} color={COLORS.steel} /> : <Eye size={14} color={COLORS.steel} />)}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div style={{ fontSize: 11.5, color: COLORS.steel, background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "10px 12px", lineHeight: 1.5, marginBottom: 16 }}>
+                  <b style={{ color: COLORS.steelLight }}>Acesso ao portal do órgão</b><br />
+                  Site, login e senha são informados ao registrar a ocorrência "Protocolo do processo".
+                </div>
+              )}
 
               <div style={{ marginTop: 16 }}>
                 <div style={{ fontSize: 11.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600, marginBottom: 8 }}>Pendência do cliente</div>
@@ -2392,6 +2544,11 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
                     {processos.filter((p) => p.id !== processo.id && p.unidade === processo.unidade).map((p) => <option key={p.id} value={p.id}>{p.cliente} — {p.assunto}</option>)}
                     <option value="outros">Outros</option>
                   </select>
+                  <div style={{ fontSize: 11, color: COLORS.steel, marginTop: 6, lineHeight: 1.5 }}>
+                    Enquanto o processo escolhido aqui não for concluído, este serviço aparece em todas as telas,
+                    gráficos e relatórios com o status <b style={{ color: STATUS_DEPENDENCIA.fg }}>Dependência de outro processo</b>,
+                    mesmo que já tenha sido iniciado.
+                  </div>
                   {processo.dependeDeOutros && (
                     <RowEditavel label="Descreva a dependência" tipo="text" valor={processo.dependeDeOutrosDescricao} largura="100%" onConfirmar={(v) => patch({ dependeDeOutrosDescricao: v })} />
                   )}
@@ -2405,6 +2562,7 @@ function DetailModal({ processo, processos, contratos, onClose, onUpdate, onOpen
               )}
               </div>
             </div>
+            </>
           )}
           {iniciado && tab === "documentos" && <DocumentosChecklistTab processo={processo} onUpdate={onUpdate} />}
           {iniciado && tab === "linhadotempo" && <LinhaDoTempoTab processo={processo} />}
@@ -2776,7 +2934,7 @@ function AtualizacoesPage({ processos, onOpenProcesso, codigosUnidade }) {
     processosFiltrados.forEach((p) => {
       const ultima = p.atualizacoes[0];
       rows.push([
-        p.cliente, (codigosUnidade || {})[`${p.cliente}|${p.unidade}`] || "", p.unidade, p.assunto, statusLabel(p.statusAtual, p.tipo), rotuloResponsavel(STATUS_CONFIG[p.statusAtual].responsavel),
+        p.cliente, (codigosUnidade || {})[`${p.cliente}|${p.unidade}`] || "", p.unidade, p.assunto, statusLabelDe(p), rotuloResponsavel(statusInfoDe(p).responsavel),
         fmtDate(p.dataProtocolo), fmtDate(p.dataPrevisaoOrgao), fmtDate(p.ultimaAtualizacao), ultima ? ultima.descricao : "",
       ]);
     });
@@ -4424,7 +4582,7 @@ function ServicoUnicoModal({ proposta, cliente, unidade, servico, contratos, pro
   const tecnico = tarefas[0] ? val(tarefas[0], "tecnico") : "-";
   const tipo = tarefas[0]?.tipo || "Processo";
   const proc = (processos || []).find((p) => p.numeroContrato === proposta && p.cliente === cliente && p.unidade === unidade && p.assunto === servico);
-  const stProc = proc ? STATUS_CONFIG[proc.statusAtual] : null;
+  const stProc = proc ? statusInfoDe(proc) : null;
   const concluidas = tarefas.filter((t) => val(t, "statusParcela") === "Concluído").length;
 
   const campoTarefa = { background: COLORS.bg, border: `1px solid ${COLORS.border}`, borderRadius: 5, padding: "6px 8px", fontSize: 11.5, color: COLORS.ice, width: "100%" };
@@ -4438,7 +4596,7 @@ function ServicoUnicoModal({ proposta, cliente, unidade, servico, contratos, pro
           <div style={{ fontSize: 12.5, color: COLORS.steelLight, marginTop: 3 }}>
             Técnico: <b style={{ color: COLORS.ice }}>{tecnico}</b> ·
             {" "}Tarefas: <Pill fg={concluidas === tarefas.length ? COLORS.green : COLORS.blue} bg={concluidas === tarefas.length ? COLORS.greenDim : COLORS.blueDim}>{concluidas}/{tarefas.length} concluída(s)</Pill>
-            {stProc && <> · Status atual: <Pill fg={stProc.fg} bg={stProc.bg}>{statusLabel(proc.statusAtual, proc.tipo)}</Pill></>}
+            {stProc && <> · Status atual: <Pill fg={stProc.fg} bg={stProc.bg}>{statusLabelDe(proc)}</Pill></>}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -4527,7 +4685,7 @@ function ContratoDetalheCompletoModal({ proposta, cliente, unidade, contratos, p
       tarefas: (g) => g.tarefas.length,
       status: (g) => {
         const p = (processos || []).find((x) => x.numeroContrato === proposta && x.cliente === cliente && x.unidade === unidade && x.assunto === g.servico);
-        return p ? statusLabel(p.statusAtual, p.tipo) : "";
+        return p ? statusLabelDe(p) : "";
       },
     });
   }, [linhas, ordem]); // eslint-disable-line
@@ -4569,7 +4727,7 @@ function ContratoDetalheCompletoModal({ proposta, cliente, unidade, contratos, p
             {servicosAgrupados.map((g) => {
               const concluidasG = g.tarefas.filter((t) => val(t, "statusParcela") === "Concluído").length;
               const proc = processoDoServico(g.servico);
-              const stProc = proc ? STATUS_CONFIG[proc.statusAtual] : null;
+              const stProc = proc ? statusInfoDe(proc) : null;
               const aberto = expandido === g.servico;
               return (
                 <React.Fragment key={g.servico}>
@@ -4586,7 +4744,7 @@ function ContratoDetalheCompletoModal({ proposta, cliente, unidade, contratos, p
                         {concluidasG}/{g.tarefas.length} concluída(s)
                       </Pill>
                     </td>
-                    <td style={tdStyle}>{stProc ? <Pill fg={stProc.fg} bg={stProc.bg}>{statusLabel(proc.statusAtual, proc.tipo)}</Pill> : "—"}</td>
+                    <td style={tdStyle}>{stProc ? <Pill fg={stProc.fg} bg={stProc.bg}>{statusLabelDe(proc)}</Pill> : "—"}</td>
                     <td style={tdStyle} onClick={(e) => e.stopPropagation()}>
                       <div style={{ display: "flex", gap: 6 }}>
                         <button onClick={() => setExpandido(aberto ? null : g.servico)} title="Ver tarefas"
@@ -5642,17 +5800,24 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
     setProcessos(processosAtualizados);
   };
 
+  /* Recalcula, a cada mudança na lista, quais processos estão travados
+     por dependência. Precisa rodar ANTES dos filtros e dos gráficos,
+     porque é isso que faz o status "Dependência de outro processo"
+     valer igual em todas as telas. */
+  useMemo(() => registrarBloqueios(processos), [processos]);
+
   const filtrados = useMemo(() => applyFiltros(processos, filtros), [processos, filtros]);
   const [ordemProc, ordenarProcPor] = useOrdenacao();
   const buscados = useMemo(() => {
     const base = !busca ? filtrados : filtrados.filter((p) => {
       const q = busca.toLowerCase();
       const cod = codigosUnidade[`${p.cliente}|${p.unidade}`] || "";
-      return `${p.cliente} ${p.unidade} ${cod} ${p.assunto} ${p.numero}`.toLowerCase().includes(q);
+      return `${p.cliente} ${p.unidade} ${cod} ${p.assunto} ${p.numero} ${p.numeroProtocolo || ""}`.toLowerCase().includes(q);
     });
     return ordenarLista(base, ordemProc, {
       codigoUnidade: (p) => codigosUnidade[`${p.cliente}|${p.unidade}`] || "",
-      status: (p) => statusLabel(p.statusAtual, p.tipo),
+      numero: (p) => numeroUnificado(p),
+      status: (p) => statusLabelDe(p),
       prazo: (p) => { const d = diasRestantes(p); return d === null ? null : d; },
       atualizacao: (p) => diasSemAtualizacao(p),
     });
@@ -5660,28 +5825,30 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
 
   // KPIs (sobre o conjunto filtrado)
   const total = filtrados.length;
-  const comPrimers = filtrados.filter((p) => STATUS_CONFIG[p.statusAtual].responsavel === "Primers").length;
-  const comCliente = filtrados.filter((p) => STATUS_CONFIG[p.statusAtual].responsavel === "Cliente").length;
-  const comOrgao = filtrados.filter((p) => STATUS_CONFIG[p.statusAtual].responsavel === "Órgão").length;
-  const vencidos = filtrados.filter((p) => { const dr = diasRestantes(p); return dr !== null && dr < 0 && !STATUS_CONFIG[p.statusAtual].final; }).length;
+  const comPrimers = filtrados.filter((p) => statusInfoDe(p).responsavel === "Primers").length;
+  const comCliente = filtrados.filter((p) => statusInfoDe(p).responsavel === "Cliente").length;
+  const comOrgao = filtrados.filter((p) => statusInfoDe(p).responsavel === "Órgão").length;
+  const vencidos = filtrados.filter((p) => { const dr = diasRestantes(p); return dr !== null && dr < 0 && !statusInfoDe(p).final; }).length;
 
   const administrativos = filtrados.filter((p) => p.tipo === "Processo").length;
   const tecnicos = filtrados.filter((p) => p.tipo === "Serviço Técnico").length;
-  const emAnalise = filtrados.filter((p) => STATUS_CONFIG[p.statusAtual].grupo === "analise").length;
-  const emExigencia = filtrados.filter((p) => STATUS_CONFIG[p.statusAtual].grupo === "exigencia").length;
-  const aguardandoInicio = filtrados.filter((p) => p.statusAtual === "aguardando").length;
+  const emAnalise = filtrados.filter((p) => statusInfoDe(p).grupo === "analise").length;
+  const emExigencia = filtrados.filter((p) => statusInfoDe(p).grupo === "exigencia").length;
+  const emDependencia = filtrados.filter((p) => statusEfetivo(p) === "dependencia").length;
+  const aguardandoInicio = filtrados.filter((p) => statusEfetivo(p) === "aguardando").length;
   const concluidos = filtrados.filter((p) => p.statusAtual === "concluido").length;
-  const indeferidos = filtrados.filter((p) => STATUS_CONFIG[p.statusAtual].grupo === "indeferido").length;
+  const indeferidos = filtrados.filter((p) => statusInfoDe(p).grupo === "indeferido").length;
 
   const porTecnico = useMemo(() => {
     const map = {};
-    TECNICOS_OPTIONS.forEach((t) => { map[t] = { tecnico: t, total: 0, concluidos: 0, emAndamento: 0, emExigencia: 0 }; });
+    TECNICOS_OPTIONS.forEach((t) => { map[t] = { tecnico: t, total: 0, concluidos: 0, emAndamento: 0, emExigencia: 0, emDependencia: 0 }; });
     filtrados.forEach((p) => {
       const chave = TECNICOS_OPTIONS.includes(p.tecnico) ? p.tecnico : "Sem técnico";
-      if (!map[chave]) map[chave] = { tecnico: chave, total: 0, concluidos: 0, emAndamento: 0, emExigencia: 0 };
+      if (!map[chave]) map[chave] = { tecnico: chave, total: 0, concluidos: 0, emAndamento: 0, emExigencia: 0, emDependencia: 0 };
       map[chave].total++;
       if (p.statusAtual === "concluido") map[chave].concluidos++;
-      else if (STATUS_CONFIG[p.statusAtual].grupo === "exigencia") map[chave].emExigencia++;
+      else if (statusInfoDe(p).grupo === "exigencia") map[chave].emExigencia++;
+      else if (statusEfetivo(p) === "dependencia") map[chave].emDependencia++;
       else if (p.statusAtual !== "aguardando") map[chave].emAndamento++;
     });
     return Object.values(map).filter((t) => t.total > 0);
@@ -5692,7 +5859,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
   const bloqueados = useMemo(() => ordenarLista(
     filtrados.map((p) => ({ p, bloqueio: processoBloqueado(p, processos) })).filter((x) => x.bloqueio),
     ordemBloq,
-    { assunto: (x) => x.p.assunto, cliente: (x) => x.p.cliente, dep: (x) => x.bloqueio.assunto, statusDep: (x) => statusLabel(x.bloqueio.statusAtual, x.bloqueio.tipo) }
+    { assunto: (x) => x.p.assunto, cliente: (x) => x.p.cliente, dep: (x) => x.bloqueio.assunto, statusDep: (x) => statusLabelDe(x.bloqueio) }
   ), [filtrados, processos, ordemBloq]);
 
   // Gráfico 1: por cliente OU por unidade (se um cliente estiver selecionado)
@@ -5705,7 +5872,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
 
   // Gráfico 2: por responsável
   const porResponsavel = useMemo(() => {
-    return RESPONSAVEIS.map((r) => ({ name: r, value: filtrados.filter((p) => STATUS_CONFIG[p.statusAtual].responsavel === r).length })).filter((r) => r.value > 0);
+    return RESPONSAVEIS.map((r) => ({ name: r, value: filtrados.filter((p) => statusInfoDe(p).responsavel === r).length })).filter((r) => r.value > 0);
   }, [filtrados]);
   const RESP_COLOR = { Primers: CHART.suspenso, Cliente: CHART.destaque, Órgão: CHART.andamento, Finalizado: CHART.concluido };
 
@@ -5717,10 +5884,10 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
   }, [filtrados]);
 
   const urgentes = useMemo(() => {
-    const base = filtrados.filter((p) => !STATUS_CONFIG[p.statusAtual].final)
+    const base = filtrados.filter((p) => !statusInfoDe(p).final)
       .map((p) => ({ ...p, dr: diasRestantes(p) })).filter((p) => p.dr !== null)
       .sort((a, b) => a.dr - b.dr).slice(0, 6);
-    return ordenarLista(base, ordemUrg, { status: (p) => statusLabel(p.statusAtual, p.tipo) });
+    return ordenarLista(base, ordemUrg, { status: (p) => statusLabelDe(p) });
   }, [filtrados, ordemUrg]);
 
   return (
@@ -5879,6 +6046,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
               <KpiCard icon={Clock} label="Aguardando início" value={aguardandoInicio} accent={COLORS.steel} sub="importados, ainda não iniciados" />
               <KpiCard icon={Search} label="Em análise" value={emAnalise} accent={CHART.andamento} sub="protocolado / aguardando órgão" />
               <KpiCard icon={AlertTriangle} label="Em exigência" value={emExigencia} accent={CHART.suspenso} sub={`${NOME_RESPONSAVEL} ou cliente`} />
+              <KpiCard icon={Lock} label="Dependência" value={emDependencia} accent={STATUS_DEPENDENCIA.fg} sub="travados por outro processo" />
               <KpiCard icon={CheckCircle2} label="Concluídos / Deferidos" value={concluidos} accent={CHART.concluido} sub="finalizados com sucesso" />
               <KpiCard icon={XCircle} label="Indeferidos" value={indeferidos} accent={CHART.destaque} sub="negados pelo órgão" />
             </div>
@@ -5893,6 +6061,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
                       <div><div style={{ color: COLORS.steel, fontSize: 10 }}>Total</div><div style={{ color: COLORS.ice, fontWeight: 700, fontSize: 16 }}>{t.total}</div></div>
                       <div><div style={{ color: COLORS.steel, fontSize: 10 }}>Em andamento</div><div style={{ color: COLORS.blue, fontWeight: 700, fontSize: 16 }}>{t.emAndamento}</div></div>
                       <div><div style={{ color: COLORS.steel, fontSize: 10 }}>Exigência</div><div style={{ color: COLORS.orange, fontWeight: 700, fontSize: 16 }}>{t.emExigencia}</div></div>
+                      <div><div style={{ color: COLORS.steel, fontSize: 10 }}>Dependência</div><div style={{ color: STATUS_DEPENDENCIA.fg, fontWeight: 700, fontSize: 16 }}>{t.emDependencia}</div></div>
                       <div><div style={{ color: COLORS.steel, fontSize: 10 }}>Concluídos</div><div style={{ color: COLORS.green, fontWeight: 700, fontSize: 16 }}>{t.concluidos}</div></div>
                     </div>
                   </div>
@@ -5963,13 +6132,13 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
                   </tr></thead>
                   <tbody>
                     {bloqueados.map(({ p, bloqueio }) => {
-                      const stB = STATUS_CONFIG[bloqueio.statusAtual];
+                      const stB = statusInfoDe(bloqueio);
                       return (
                         <tr key={p.id} className="row-hover" style={{ cursor: "pointer" }} onClick={() => setSelected(p)}>
                           <td style={{ padding: "10px 18px", fontSize: 13, color: COLORS.steelLight, borderBottom: `1px solid ${COLORS.border}` }}>{p.assunto}</td>
                           <td style={{ padding: "10px 18px", fontSize: 13, borderBottom: `1px solid ${COLORS.border}` }}>{p.cliente}</td>
                           <td style={{ padding: "10px 18px", fontSize: 13, color: COLORS.steelLight, borderBottom: `1px solid ${COLORS.border}` }}>{bloqueio.assunto}</td>
-                          <td style={{ padding: "10px 18px", borderBottom: `1px solid ${COLORS.border}` }}><Pill fg={stB.fg} bg={stB.bg}>{statusLabel(bloqueio.statusAtual, bloqueio.tipo)}</Pill></td>
+                          <td style={{ padding: "10px 18px", borderBottom: `1px solid ${COLORS.border}` }}><Pill fg={stB.fg} bg={stB.bg}>{statusLabelDe(bloqueio)}</Pill></td>
                         </tr>
                       );
                     })}
@@ -5990,12 +6159,12 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
                 </tr></thead>
                 <tbody>
                   {urgentes.map((p) => {
-                    const st = STATUS_CONFIG[p.statusAtual]; const prazo = prazoInfo(p.dr);
+                    const st = statusInfoDe(p); const prazo = prazoInfo(p.dr);
                     return (
                       <tr key={p.id} className="row-hover" style={{ cursor: "pointer" }} onClick={() => setSelected(p)}>
                         <td style={{ padding: "10px 18px", fontSize: 13, borderBottom: `1px solid ${COLORS.border}` }}>{p.cliente}</td>
                         <td style={{ padding: "10px 18px", fontSize: 13, color: COLORS.steelLight, borderBottom: `1px solid ${COLORS.border}` }}>{p.assunto}</td>
-                        <td style={{ padding: "10px 18px", borderBottom: `1px solid ${COLORS.border}` }}><Pill fg={st.fg} bg={st.bg}>{statusLabel(p.statusAtual, p.tipo)}</Pill></td>
+                        <td style={{ padding: "10px 18px", borderBottom: `1px solid ${COLORS.border}` }}><Pill fg={st.fg} bg={st.bg}>{statusLabelDe(p)}</Pill></td>
                         <td style={{ padding: "10px 18px", borderBottom: `1px solid ${COLORS.border}` }}><Pill fg={prazo.fg} bg={prazo.bg}>{prazo.label}</Pill></td>
                         <td style={{ padding: "10px 18px", fontSize: 13, color: COLORS.steel, borderBottom: `1px solid ${COLORS.border}` }}>{p.tecnico || "—"}</td>
                       </tr>
@@ -6036,7 +6205,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
                     <Th campo="assunto" ordem={ordemProc} ordenarPor={ordenarProcPor}>Assunto</Th>
                     <Th campo="tipo" ordem={ordemProc} ordenarPor={ordenarProcPor}>Tipo</Th>
                     <Th campo="tecnico" ordem={ordemProc} ordenarPor={ordenarProcPor}>Técnico</Th>
-                    <Th campo="numero" ordem={ordemProc} ordenarPor={ordenarProcPor}>Nº processo</Th>
+                    <Th campo="numero" ordem={ordemProc} ordenarPor={ordenarProcPor}>Nº processo / protocolo</Th>
                     <Th campo="status" ordem={ordemProc} ordenarPor={ordenarProcPor}>Status</Th>
                     <Th campo="dataProtocolo" ordem={ordemProc} ordenarPor={ordenarProcPor}>Protocolo</Th>
                     <Th campo="dataPrevisaoOrgao" ordem={ordemProc} ordenarPor={ordenarProcPor}>Previsão órgão</Th>
@@ -6046,7 +6215,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
                   </tr></thead>
                   <tbody>
                     {paginate(buscados, processosPage, processosPageSize).map((p) => {
-                      const st = STATUS_CONFIG[p.statusAtual]; const dr = diasRestantes(p); const prazo = prazoInfo(dr); const ds = diasSemAtualizacao(p);
+                      const st = statusInfoDe(p); const dr = diasRestantes(p); const prazo = prazoInfo(dr); const ds = diasSemAtualizacao(p);
                       const bloqueio = processoBloqueado(p, processos);
                       const aguardandoInicioRow = p.statusAtual === "aguardando";
                       return (
@@ -6066,9 +6235,9 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
                           </Td>
                           <Td style={{ fontSize: 11.5, color: COLORS.steel }}>{p.tipo}</Td>
                           <Td largura={130} style={{ fontSize: 11.5 }}>{p.tecnico}</Td>
-                          <Td largura={130} style={{ fontSize: 12, color: COLORS.steel, fontFamily: FONT_MONO }}>{p.numero}</Td>
-                          <Td titulo={statusLabel(p.statusAtual, p.tipo)}>
-                            <Pill fg={st.fg} bg={st.bg} stamp>{statusLabel(p.statusAtual, p.tipo)}</Pill>
+                          <Td largura={150} style={{ fontSize: 12, color: COLORS.steel, fontFamily: FONT_MONO }}>{numeroUnificado(p) || "—"}</Td>
+                          <Td titulo={statusLabelDe(p)} largura={190}>
+                            <Pill fg={st.fg} bg={st.bg} stamp>{statusLabelDe(p)}</Pill>
                             {aguardandoInicioRow && <span title="Lembrete: iniciar serviço" style={{ width: 7, height: 7, borderRadius: "50%", background: COLORS.red, display: "inline-block", marginLeft: 6 }} />}
                           </Td>
                           <Td style={{ fontSize: 12, color: COLORS.steel, fontFamily: FONT_MONO }}>{fmtDate(p.dataProtocolo)}</Td>
