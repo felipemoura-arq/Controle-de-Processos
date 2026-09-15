@@ -635,7 +635,11 @@ function contratoToRow(c) {
   };
 }
 function rowToAgendaItem(r) {
-  return { id: r.id, data: r.data, titulo: r.titulo, tipo: r.tipo, tecnico: r.tecnico, descricao: r.descricao, processoId: r.processo_id || null };
+  return {
+    id: r.id, data: r.data, titulo: r.titulo, tipo: r.tipo, tecnico: r.tecnico, descricao: r.descricao,
+    processoId: r.processo_id || null, ocorrenciaId: r.ocorrencia_id || null,
+    concluido: r.concluido === true, criadoEm: r.created_at || null,
+  };
 }
 
 /* ------------------------------------------------------------------
@@ -662,6 +666,38 @@ function processoDoItemAgenda(item, processos) {
   if (!cliente || !m) return null;
   const assunto = m[1].trim(), unidade = m[2].trim();
   return lista.find((p) => p.cliente === cliente && p.assunto === assunto && p.unidade === unidade) || null;
+}
+
+/* ------------------------------------------------------------------
+   SEMÁFORO DA AGENDA
+   Laranja = pendente, ainda não teve retorno.
+   Verde   = já resolvido — o serviço foi concluído, ou uma ocorrência
+             NOVA foi registrada depois que este compromisso nasceu
+             (ou seja: a pendência foi atualizada).
+   A virada é automática: assim que a ocorrência é registrada e salva,
+   a bolinha muda de cor sozinha.
+   ------------------------------------------------------------------ */
+function agendaResolvido(item, processos) {
+  const nao = { resolvido: false, motivo: "" };
+  if (!item) return nao;
+  if (item.concluido) return { resolvido: true, motivo: "Marcado como atualizado" };
+  const p = processoDoItemAgenda(item, processos);
+  if (!p) return nao;
+  if (statusInfoDe(p).final) return { resolvido: true, motivo: `Serviço ${statusLabelDe(p).toLowerCase()}` };
+  const lista = p.atualizacoes || [];
+  if (item.ocorrenciaId) {
+    /* A lista vem da mais NOVA para a mais antiga. Se a ocorrência que
+       gerou o compromisso não está mais na primeira posição, é porque
+       veio outra depois dela. */
+    const idx = lista.findIndex((a) => String(a.id) === String(item.ocorrenciaId));
+    return idx > 0 ? { resolvido: true, motivo: `Atualizado: ${lista[0].tipo}` } : nao;
+  }
+  /* Compromissos criados antes desta versão não guardam a ocorrência
+     de origem: comparamos com a data em que o compromisso foi criado. */
+  const nascimento = String(item.criadoEm || "").slice(0, 10);
+  if (!nascimento) return nao;
+  const nova = lista.find((a) => String(a.data || "") > nascimento);
+  return nova ? { resolvido: true, motivo: `Atualizado: ${nova.tipo}` } : nao;
 }
 function rowToEvento(r) {
   return { id: r.id, titulo: r.titulo, tipo: r.tipo, data: r.data, tecnicosObrigatorios: r.tecnicos_obrigatorios || [], presencas: r.presencas || {} };
@@ -1933,6 +1969,8 @@ function RegistrarOcorrenciaModal({ processo, onClose, onSalvar, tipoInicial, em
     const agenda = (criarAgenda && previsaoRetorno) ? {
       data: previsaoRetorno,
       ...(RE_UUID.test(String(processo.id)) ? { processo_id: processo.id } : {}),
+      ocorrencia_id: ocorrencia.id,
+      concluido: false,
       titulo: `${processo.cliente} — ${tipoCfg.label}`,
       tipo: tipoCfg.id === "reuniao" ? "Reunião" : "Tarefa",
       tecnico: processo.tecnico && processo.tecnico !== "-" ? processo.tecnico : "",
@@ -2810,7 +2848,7 @@ function compromissosDoProcesso(p) {
   return lista;
 }
 
-function AgendaSemanal({ processos, todosProcessos, agendaItens, onOpenProcesso, onAddItem, onRemoveItem }) {
+function AgendaSemanal({ processos, todosProcessos, agendaItens, onOpenProcesso, onAddItem, onRemoveItem, onMarcarItem }) {
   const [showModal, setShowModal] = useState(null); // data (iso) do dia clicado, ou null
   const [tecnicoAtivo, setTecnicoAtivo] = useState("Todos");
   const [modoView, setModoView] = useState("semana"); // dia | semana | mes
@@ -2864,14 +2902,26 @@ function AgendaSemanal({ processos, todosProcessos, agendaItens, onOpenProcesso,
     setDataRef(nova);
   };
 
+  const baseProcessos = todosProcessos || processos;
   const dias = diasExibir.map((d) => {
     const iso = isoDia(d);
     return {
       data: d, iso, dentroDoMes: modoView !== "mes" || d.getMonth() === dataRef.getMonth(),
       processosDia: compromissosPorDia[iso] || [],
-      itensDia: itensFiltrados.filter((a) => a.data === iso),
+      itensDia: itensFiltrados.filter((a) => a.data === iso).map((a) => {
+        const r = agendaResolvido(a, baseProcessos);
+        return { ...a, resolvido: r.resolvido, motivoResolvido: r.motivo };
+      }),
     };
   });
+
+  /* Contadores do período que está na tela, para a legenda. */
+  const totalPendentes = dias.reduce((n, d) => n + d.itensDia.filter((a) => !a.resolvido).length, 0);
+  const totalResolvidos = dias.reduce((n, d) => n + d.itensDia.filter((a) => a.resolvido).length, 0);
+  const CorPendente = CHART.suspenso, CorResolvido = CHART.concluido;
+  const Bolinha = ({ cor, tamanho = 8 }) => (
+    <span style={{ width: tamanho, height: tamanho, borderRadius: "50%", background: cor, display: "inline-block", flexShrink: 0 }} />
+  );
 
   const alturaCelula = modoView === "mes" ? 82 : 140;
   const colunas = modoView === "dia" ? "1fr" : "repeat(7, minmax(100px, 1fr))";
@@ -2919,6 +2969,23 @@ function AgendaSemanal({ processos, todosProcessos, agendaItens, onOpenProcesso,
         </div>
       </div>
 
+      {/* Legenda — o que cada bolinha quer dizer */}
+      <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap", marginBottom: 12, background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "8px 12px" }}>
+        <span style={{ fontSize: 10.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 700 }}>Legenda</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: COLORS.steelLight }}>
+          <Bolinha cor={CorPendente} /> Pendente — aguardando conclusão ou nova ocorrência
+          <b style={{ color: CorPendente, fontFamily: FONT_MONO }}>{totalPendentes}</b>
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: COLORS.steelLight }}>
+          <Bolinha cor={CorResolvido} /> Atualizado / concluído
+          <b style={{ color: CorResolvido, fontFamily: FONT_MONO }}>{totalResolvidos}</b>
+        </span>
+        <span style={{ fontSize: 10.5, color: COLORS.steel, fontStyle: "italic", flex: 1, minWidth: 180 }}>
+          A bolinha vira verde sozinha quando o serviço é concluído ou quando uma nova ocorrência é registrada.
+          Clique nela para marcar ou desmarcar à mão.
+        </span>
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: colunas, gap: 8, overflowX: "auto" }}>
         {dias.map(({ data, iso, dentroDoMes, processosDia, itensDia }) => (
           <div key={iso} onClick={modoView === "mes" ? () => { setDataRef(new Date(data)); setModoView("dia"); } : undefined} style={{
@@ -2946,7 +3013,12 @@ function AgendaSemanal({ processos, todosProcessos, agendaItens, onOpenProcesso,
               (processosDia.length + itensDia.length) > 0 && (
                 <div style={{ fontSize: 9.5, color: COLORS.steelLight, marginTop: 2, lineHeight: 1.5 }}>
                   {processosDia.length > 0 && <div>{processosDia.length} prazo(s)</div>}
-                  {itensDia.length > 0 && <div>{itensDia.length} item(ns)</div>}
+                  {itensDia.filter((a) => !a.resolvido).length > 0 && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}><Bolinha cor={CorPendente} tamanho={6} />{itensDia.filter((a) => !a.resolvido).length} pendente(s)</div>
+                  )}
+                  {itensDia.filter((a) => a.resolvido).length > 0 && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}><Bolinha cor={CorResolvido} tamanho={6} />{itensDia.filter((a) => a.resolvido).length} atualizado(s)</div>
+                  )}
                 </div>
               )
             ) : (
@@ -2967,18 +3039,28 @@ function AgendaSemanal({ processos, todosProcessos, agendaItens, onOpenProcesso,
                   const servico = processoDoItemAgenda(a, todosProcessos || processos);
                   return (
                   <div key={a.id} style={{ display: "flex", alignItems: "flex-start", gap: 5, marginBottom: 5 }}>
-                    <div style={{ width: 6, height: 6, borderRadius: "50%", background: AGENDA_TIPO_COLOR[a.tipo] || COLORS.steelLight, marginTop: 4, flexShrink: 0 }} />
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onMarcarItem && onMarcarItem(a.id, !a.resolvido); }}
+                      title={a.resolvido
+                        ? "Atualizado / concluído — clique para voltar a pendente"
+                        : "Pendente — clique para marcar como atualizado (ou registre a ocorrência no serviço)"}
+                      style={{ background: "none", border: "none", padding: 0, marginTop: 3, cursor: onMarcarItem ? "pointer" : "default", flexShrink: 0, lineHeight: 0 }}>
+                      <span style={{ width: 9, height: 9, borderRadius: "50%", display: "inline-block",
+                        background: a.resolvido ? CorResolvido : CorPendente,
+                        boxShadow: `0 0 0 2px ${hexParaRgba(a.resolvido ? CorResolvido : CorPendente, 0.22)}` }} />
+                    </button>
                     <div
                       onClick={servico ? (e) => { e.stopPropagation(); onOpenProcesso(servico); } : undefined}
                       title={servico ? `Abrir ${servico.assunto} — ${servico.cliente}` : undefined}
                       className={servico ? "agenda-link" : undefined}
                       style={{ flex: 1, minWidth: 0, cursor: servico ? "pointer" : "default", borderRadius: 5, padding: servico ? "2px 4px" : 0, margin: servico ? "-2px -4px" : 0 }}>
-                      <div style={{ fontSize: 10.5, color: servico ? COLORS.red : COLORS.ice, fontWeight: 600, lineHeight: 1.3, display: "flex", alignItems: "center", gap: 4 }}>
+                      <div style={{ fontSize: 10.5, color: a.resolvido ? COLORS.steelLight : (servico ? COLORS.red : COLORS.ice), fontWeight: 600, lineHeight: 1.3, display: "flex", alignItems: "center", gap: 4, textDecoration: a.resolvido ? "line-through" : "none" }}>
                         <span style={{ flex: 1, minWidth: 0 }}>{a.titulo}</span>
-                        {servico && <ExternalLink size={10} color={COLORS.red} style={{ flexShrink: 0 }} />}
+                        {servico && <ExternalLink size={10} color={a.resolvido ? COLORS.steel : COLORS.red} style={{ flexShrink: 0 }} />}
                       </div>
                       <div style={{ fontSize: 9.5, color: COLORS.steel }}>{a.tipo}{a.tecnico ? ` · ${a.tecnico}` : ""}{a.descricao ? ` · ${a.descricao}` : ""}</div>
-                      {servico && <div style={{ fontSize: 9, color: COLORS.red, marginTop: 2 }}>Clique para abrir o serviço e atualizar</div>}
+                      {servico && !a.resolvido && <div style={{ fontSize: 9, color: COLORS.red, marginTop: 2 }}>Clique para abrir o serviço e atualizar</div>}
+                      {a.resolvido && <div style={{ fontSize: 9, color: CorResolvido, marginTop: 2 }}>{a.motivoResolvido}</div>}
                     </div>
                     <button onClick={(e) => { e.stopPropagation(); onRemoveItem(a.id); }} title="Remover" style={{ background: "none", border: "none", cursor: "pointer", padding: 0, flexShrink: 0 }}>
                       <X size={10} color={COLORS.steel} />
@@ -5731,6 +5813,13 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
     setAgendaItens((prev) => prev.filter((a) => a.id !== id));
     await supabase.from("agenda_itens").delete().eq("id", id);
   };
+  /* Marcar/desmarcar um compromisso à mão. Grava na hora — é um
+     clique único e explícito, como as exclusões. */
+  const marcarAgendaItem = async (id, concluido) => {
+    setAgendaItens((prev) => prev.map((a) => (a.id === id ? { ...a, concluido } : a)));
+    const { error } = await supabase.from("agenda_itens").update({ concluido }).eq("id", id);
+    if (error) console.error("Erro ao marcar item da agenda:", error);
+  };
   const updateContrato = (id, fields) => {
     setContratos((prev) => {
       let next = prev.map((c) => (c.id === id ? { ...c, ...fields } : c));
@@ -6194,7 +6283,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
               </div>
             </div>
 
-            <AgendaSemanal processos={filtrados} todosProcessos={processos} agendaItens={agendaItens} onOpenProcesso={(p) => setSelected(p)} onAddItem={addAgendaItem} onRemoveItem={removeAgendaItem} />
+            <AgendaSemanal processos={filtrados} todosProcessos={processos} agendaItens={agendaItens} onOpenProcesso={(p) => setSelected(p)} onAddItem={addAgendaItem} onRemoveItem={removeAgendaItem} onMarcarItem={marcarAgendaItem} />
 
             <div style={{ display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
               <PainelGrafico titulo={porClienteOuUnidade.label} subtitulo="Quantidade de processos e serviços no filtro atual" style={{ flex: "2 1 380px" }}>
