@@ -12,7 +12,7 @@ import {
   ClipboardCheck, History, Download, MessageSquarePlus, CheckCircle2,
   XCircle, MinusCircle, Filter, ChevronLeft, ChevronDown, Layers,
   Link2, Lock, Wrench, FileSignature, Pencil, Trash2, PlusCircle, LogOut, Users,
-  ArrowUp, ArrowDown, ArrowUpDown, Save, RotateCcw, ClipboardList
+  ArrowUp, ArrowDown, ArrowUpDown, Save, RotateCcw, ClipboardList, ExternalLink
 } from "lucide-react";
 
 /* ============================================================
@@ -635,7 +635,33 @@ function contratoToRow(c) {
   };
 }
 function rowToAgendaItem(r) {
-  return { id: r.id, data: r.data, titulo: r.titulo, tipo: r.tipo, tecnico: r.tecnico, descricao: r.descricao };
+  return { id: r.id, data: r.data, titulo: r.titulo, tipo: r.tipo, tecnico: r.tecnico, descricao: r.descricao, processoId: r.processo_id || null };
+}
+
+/* ------------------------------------------------------------------
+   AGENDA → SERVIÇO
+   Todo compromisso criado a partir de uma ocorrência guarda o id do
+   serviço, para o clique na agenda abrir o pop-up certo. Itens
+   criados antes desta versão não têm o id: para eles, o serviço é
+   reencontrado pelo texto (cliente no título, "Serviço (Unidade) —"
+   na descrição), que é o formato que o próprio sistema gera.
+   ------------------------------------------------------------------ */
+const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function processoDoItemAgenda(item, processos) {
+  if (!item) return null;
+  const lista = processos || [];
+  if (item.processoId) {
+    const achado = lista.find((p) => String(p.id) === String(item.processoId));
+    if (achado) return achado;
+  }
+  const cliente = String(item.titulo || "").split(" — ")[0].trim();
+  const desc = String(item.descricao || "");
+  const corte = desc.indexOf(" — ");
+  const cabecalho = corte >= 0 ? desc.slice(0, corte) : desc;
+  const m = cabecalho.match(/^(.*)\s+\(([^()]*)\)\s*$/);
+  if (!cliente || !m) return null;
+  const assunto = m[1].trim(), unidade = m[2].trim();
+  return lista.find((p) => p.cliente === cliente && p.assunto === assunto && p.unidade === unidade) || null;
 }
 function rowToEvento(r) {
   return { id: r.id, titulo: r.titulo, tipo: r.tipo, data: r.data, tecnicosObrigatorios: r.tecnicos_obrigatorios || [], presencas: r.presencas || {} };
@@ -1766,6 +1792,49 @@ function camposDoTipo(tipoCfg, processo) {
   return (tipoCfg.campos || []).filter((c) => (tecnico ? !c.soProcesso : !c.soTecnico));
 }
 
+/* ------------------------------------------------------------------
+   CAMPO À PROVA DE PREENCHIMENTO AUTOMÁTICO
+   O navegador guarda o usuário e a senha DO PRÓPRIO SISTEMA e, ao ver
+   um par "texto + senha" na tela, preenche sozinho. Isso fazia o
+   login do administrador acabar gravado como acesso ao portal do
+   órgão. Três defesas, juntas:
+     1. o campo nasce somente-leitura e só libera quando a pessoa
+        clica nele (o Chrome não preenche campo somente-leitura);
+     2. o name/id não tem "login" nem "senha", e a senha usa
+        autocomplete="new-password" (o navegador entende que é uma
+        senha nova, não a dele);
+     3. quem salva ainda confere se a pessoa realmente digitou.
+   ------------------------------------------------------------------ */
+function CampoSemAutoPreenchimento({ tipo, valor, chave, onChange, estilo }) {
+  const [somenteLeitura, setSomenteLeitura] = useState(true);
+  const [mostrar, setMostrar] = useState(false);
+  const ehSenha = tipo === "password";
+  const nomeNeutro = `campo-portal-${String(chave || "x").length}-${(chave || "x").slice(-2)}`;
+  return (
+    <div style={{ position: "relative" }}>
+      <input
+        type={ehSenha && !mostrar ? "password" : "text"}
+        name={nomeNeutro} id={nomeNeutro}
+        autoComplete={ehSenha ? "new-password" : "off"}
+        autoCorrect="off" autoCapitalize="off" spellCheck={false}
+        data-lpignore="true" data-1p-ignore="true" data-form-type="other"
+        readOnly={somenteLeitura}
+        onFocus={() => setSomenteLeitura(false)}
+        onBlur={() => setSomenteLeitura(true)}
+        value={valor}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Preencher (opcional)"
+        style={{ ...estilo, paddingRight: ehSenha ? 34 : (estilo && estilo.paddingRight) }} />
+      {ehSenha && (
+        <button type="button" onClick={() => setMostrar((v) => !v)} title={mostrar ? "Ocultar" : "Mostrar"}
+          style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 0 }}>
+          {mostrar ? <EyeOff size={14} color={COLORS.steel} /> : <Eye size={14} color={COLORS.steel} />}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function RegistrarOcorrenciaModal({ processo, onClose, onSalvar, tipoInicial, emEdicao }) {
   const disponiveis = tiposOcorrenciaDisponiveis(processo);
   const editando = !!emEdicao;
@@ -1776,6 +1845,16 @@ function RegistrarOcorrenciaModal({ processo, onClose, onSalvar, tipoInicial, em
   const campos = camposDoTipo(tipoCfg, processo);
 
   const [valores, setValores] = useState(editando ? { ...(emEdicao.camposAplicados || {}) } : {});
+  /* Guarda quais campos a PESSOA realmente digitou. Os campos de
+     acesso ao portal (site/login/senha) só são gravados se estiverem
+     nessa lista — assim, se o navegador tentar preencher sozinho com
+     a senha salva do próprio sistema, nada disso vai para o serviço. */
+  const [tocados, setTocados] = useState(() => new Set());
+  const marcarTocado = (k) => setTocados((s) => { const n = new Set(s); n.add(k); return n; });
+  /* Os campos de acesso ao portal só existem na tela depois que a
+     pessoa marca esta opção. Enquanto ela estiver desmarcada não há
+     input nenhum para o navegador preencher — e nada é gravado. */
+  const [informarAcesso, setInformarAcesso] = useState(false);
   const [descricao, setDescricao] = useState(editando ? (emEdicao.descricao || "") : "");
   const [dataRegistro, setDataRegistro] = useState(editando ? (emEdicao.data || hojeISOStr()) : hojeISOStr());
   const [previsaoRetorno, setPrevisaoRetorno] = useState(editando ? (emEdicao.dataPrevistaRetorno || "") : "");
@@ -1795,10 +1874,13 @@ function RegistrarOcorrenciaModal({ processo, onClose, onSalvar, tipoInicial, em
     if (editando && !tipoTocado) return;
     const iniciais = {};
     camposDoTipo(tipoCfg, processo).forEach((c) => {
+      if (c.sigiloso) { iniciais[c.key] = ""; return; }   // acesso ao portal sempre começa em branco
       const atual = processo[c.key];
       iniciais[c.key] = (atual && atual !== "-") ? atual : (c.padrao === "hoje" ? hojeISOStr() : "");
     });
     setValores(iniciais);
+    setTocados(new Set());
+    setInformarAcesso(false);
   }, [tipoId]); // eslint-disable-line
 
   const trocarTipo = (novo) => { setTipoTocado(true); setTipoId(novo); if (editando) setReaplicar(true); };
@@ -1813,7 +1895,11 @@ function RegistrarOcorrenciaModal({ processo, onClose, onSalvar, tipoInicial, em
       .map((c) => `${c.label}: ${c.type === "date" ? fmtDate(valores[c.key]) : valores[c.key]}`)
       .join(" · ");
     const camposAplicados = {};
-    campos.forEach((c) => { if (valores[c.key]) camposAplicados[c.key] = valores[c.key]; });
+    campos.forEach((c) => {
+      if (!valores[c.key]) return;
+      if (c.sigiloso && !(informarAcesso && tocados.has(c.key))) return;   // nunca confia em preenchimento automático
+      camposAplicados[c.key] = valores[c.key];
+    });
     const ocorrencia = {
       id: editando ? emEdicao.id : `oc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       tipoOcorrencia: tipoCfg.id,
@@ -1846,6 +1932,7 @@ function RegistrarOcorrenciaModal({ processo, onClose, onSalvar, tipoInicial, em
 
     const agenda = (criarAgenda && previsaoRetorno) ? {
       data: previsaoRetorno,
+      ...(RE_UUID.test(String(processo.id)) ? { processo_id: processo.id } : {}),
       titulo: `${processo.cliente} — ${tipoCfg.label}`,
       tipo: tipoCfg.id === "reuniao" ? "Reunião" : "Tarefa",
       tecnico: processo.tecnico && processo.tecnico !== "-" ? processo.tecnico : "",
@@ -1897,7 +1984,7 @@ function RegistrarOcorrenciaModal({ processo, onClose, onSalvar, tipoInicial, em
             {campos.filter((c) => !c.sigiloso).map((c) => (
               <div key={c.key} style={{ gridColumn: campos.filter((x) => !x.sigiloso).length === 1 ? "1 / -1" : "auto" }}>
                 <label style={labelCampo}>{c.label}</label>
-                <input type={c.type} value={valores[c.key] || ""} onChange={(e) => setValores((v) => ({ ...v, [c.key]: e.target.value }))}
+                <input type={c.type} value={valores[c.key] || ""} onChange={(e) => { marcarTocado(c.key); setValores((v) => ({ ...v, [c.key]: e.target.value })); }}
                   style={{ ...inputBase, background: COLORS.panel }} />
               </div>
             ))}
@@ -1907,18 +1994,29 @@ function RegistrarOcorrenciaModal({ processo, onClose, onSalvar, tipoInicial, em
               <div style={{ fontSize: 10.5, color: COLORS.steel, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 700, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
                 <Lock size={11} /> Acesso ao portal do órgão
               </div>
-              <div style={{ fontSize: 11, color: COLORS.steel, marginBottom: 10, lineHeight: 1.5 }}>
-                Uso interno. Estes dados NÃO saem em nenhum relatório exportado nem no histórico enviado ao cliente.
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                {campos.filter((c) => c.sigiloso).map((c) => (
-                  <div key={c.key} style={{ gridColumn: c.key === "site" ? "1 / -1" : "auto" }}>
-                    <label style={labelCampo}>{c.label}</label>
-                    <input type={c.type} autoComplete="off" value={valores[c.key] || ""} onChange={(e) => setValores((v) => ({ ...v, [c.key]: e.target.value }))}
-                      style={{ ...inputBase, background: COLORS.panel }} />
-                  </div>
-                ))}
-              </div>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer", marginBottom: informarAcesso ? 10 : 0 }}>
+                <input type="checkbox" checked={informarAcesso} onChange={(e) => setInformarAcesso(e.target.checked)} style={{ marginTop: 2 }} />
+                <span style={{ fontSize: 11.5, color: COLORS.steelLight, lineHeight: 1.5 }}>
+                  Informar site, login e senha do portal do órgão
+                  <br />
+                  <span style={{ fontSize: 10.5, color: COLORS.steel }}>
+                    Deixe desmarcado se não houver portal ou se você não tem o acesso agora — nada é gravado.
+                    Uso interno: estes dados NÃO saem em nenhum relatório exportado nem no histórico enviado ao cliente.
+                  </span>
+                </span>
+              </label>
+              {informarAcesso && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  {campos.filter((c) => c.sigiloso).map((c) => (
+                    <div key={c.key} style={{ gridColumn: c.key === "site" ? "1 / -1" : "auto" }}>
+                      <label style={labelCampo}>{c.label}</label>
+                      <CampoSemAutoPreenchimento tipo={c.type} valor={valores[c.key] || ""} chave={c.key}
+                        onChange={(v) => { marcarTocado(c.key); setValores((vv) => ({ ...vv, [c.key]: v })); }}
+                        estilo={{ ...inputBase, background: COLORS.panel }} />
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -2712,7 +2810,7 @@ function compromissosDoProcesso(p) {
   return lista;
 }
 
-function AgendaSemanal({ processos, agendaItens, onOpenProcesso, onAddItem, onRemoveItem }) {
+function AgendaSemanal({ processos, todosProcessos, agendaItens, onOpenProcesso, onAddItem, onRemoveItem }) {
   const [showModal, setShowModal] = useState(null); // data (iso) do dia clicado, ou null
   const [tecnicoAtivo, setTecnicoAtivo] = useState("Todos");
   const [modoView, setModoView] = useState("semana"); // dia | semana | mes
@@ -2862,18 +2960,32 @@ function AgendaSemanal({ processos, agendaItens, onOpenProcesso, onAddItem, onRe
                 ))}
                 {modoView !== "dia" && processosDia.length > 2 && <div style={{ fontSize: 10, color: COLORS.steel, marginBottom: 4 }}>+{processosDia.length - 2} processo(s)</div>}
 
-                {itensDia.map((a) => (
+                {itensDia.map((a) => {
+                  /* Se o compromisso veio de uma ocorrência, clicar nele
+                     abre o pop-up daquele serviço, já pronto para
+                     registrar a atualização da pendência. */
+                  const servico = processoDoItemAgenda(a, todosProcessos || processos);
+                  return (
                   <div key={a.id} style={{ display: "flex", alignItems: "flex-start", gap: 5, marginBottom: 5 }}>
                     <div style={{ width: 6, height: 6, borderRadius: "50%", background: AGENDA_TIPO_COLOR[a.tipo] || COLORS.steelLight, marginTop: 4, flexShrink: 0 }} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 10.5, color: COLORS.ice, fontWeight: 600, lineHeight: 1.3 }}>{a.titulo}</div>
+                    <div
+                      onClick={servico ? (e) => { e.stopPropagation(); onOpenProcesso(servico); } : undefined}
+                      title={servico ? `Abrir ${servico.assunto} — ${servico.cliente}` : undefined}
+                      className={servico ? "agenda-link" : undefined}
+                      style={{ flex: 1, minWidth: 0, cursor: servico ? "pointer" : "default", borderRadius: 5, padding: servico ? "2px 4px" : 0, margin: servico ? "-2px -4px" : 0 }}>
+                      <div style={{ fontSize: 10.5, color: servico ? COLORS.red : COLORS.ice, fontWeight: 600, lineHeight: 1.3, display: "flex", alignItems: "center", gap: 4 }}>
+                        <span style={{ flex: 1, minWidth: 0 }}>{a.titulo}</span>
+                        {servico && <ExternalLink size={10} color={COLORS.red} style={{ flexShrink: 0 }} />}
+                      </div>
                       <div style={{ fontSize: 9.5, color: COLORS.steel }}>{a.tipo}{a.tecnico ? ` · ${a.tecnico}` : ""}{a.descricao ? ` · ${a.descricao}` : ""}</div>
+                      {servico && <div style={{ fontSize: 9, color: COLORS.red, marginTop: 2 }}>Clique para abrir o serviço e atualizar</div>}
                     </div>
-                    <button onClick={() => onRemoveItem(a.id)} title="Remover" style={{ background: "none", border: "none", cursor: "pointer", padding: 0, flexShrink: 0 }}>
+                    <button onClick={(e) => { e.stopPropagation(); onRemoveItem(a.id); }} title="Remover" style={{ background: "none", border: "none", cursor: "pointer", padding: 0, flexShrink: 0 }}>
                       <X size={10} color={COLORS.steel} />
                     </button>
                   </div>
-                ))}
+                  );
+                })}
 
                 {processosDia.length === 0 && itensDia.length === 0 && <div style={{ fontSize: 10.5, color: COLORS.steel }}>—</div>}
               </>
@@ -4425,6 +4537,9 @@ function RowEditavel({ label, tipo, valor, onConfirmar, largura }) {
       <span style={{ fontSize: 12, color: COLORS.steel, flexShrink: 0 }}>{label}</span>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <input type={tipo === "date" ? "date" : "text"} value={pendente} onChange={(e) => setPendente(e.target.value)}
+          autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
+          data-lpignore="true" data-1p-ignore="true" data-form-type="other"
+          name={`campo-livre-${String(label || "x").length}-${String(label || "x").charCodeAt(0)}`}
           placeholder={tipo === "date" ? "" : "Preencher..."}
           style={{ background: "transparent", border: "none", borderBottom: `1px dashed ${COLORS.border}`, color: COLORS.ice, fontSize: 13, textAlign: "right", padding: "2px 0", width: largura || (tipo === "date" ? 130 : 160) }} />
         {mudou && (
@@ -5859,8 +5974,13 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
   const bloqueados = useMemo(() => ordenarLista(
     filtrados.map((p) => ({ p, bloqueio: processoBloqueado(p, processos) })).filter((x) => x.bloqueio),
     ordemBloq,
-    { assunto: (x) => x.p.assunto, cliente: (x) => x.p.cliente, dep: (x) => x.bloqueio.assunto, statusDep: (x) => statusLabelDe(x.bloqueio) }
-  ), [filtrados, processos, ordemBloq]);
+    {
+      assunto: (x) => x.p.assunto, cliente: (x) => x.p.cliente,
+      codigoUnidade: (x) => codigosUnidade[`${x.p.cliente}|${x.p.unidade}`] || "",
+      unidade: (x) => x.p.unidade,
+      dep: (x) => x.bloqueio.assunto, statusDep: (x) => statusLabelDe(x.bloqueio),
+    }
+  ), [filtrados, processos, ordemBloq, codigosUnidade]);
 
   // Gráfico 1: por cliente OU por unidade (se um cliente estiver selecionado)
   const porClienteOuUnidade = useMemo(() => {
@@ -5887,8 +6007,11 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
     const base = filtrados.filter((p) => !statusInfoDe(p).final)
       .map((p) => ({ ...p, dr: diasRestantes(p) })).filter((p) => p.dr !== null)
       .sort((a, b) => a.dr - b.dr).slice(0, 6);
-    return ordenarLista(base, ordemUrg, { status: (p) => statusLabelDe(p) });
-  }, [filtrados, ordemUrg]);
+    return ordenarLista(base, ordemUrg, {
+      status: (p) => statusLabelDe(p),
+      codigoUnidade: (p) => codigosUnidade[`${p.cliente}|${p.unidade}`] || "",
+    });
+  }, [filtrados, ordemUrg, codigosUnidade]);
 
   return (
     <RascunhoContext.Provider value={rascunho}>
@@ -5900,6 +6023,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
         .blueprint-bg { background-image: linear-gradient(${COLORS.border} 1px, transparent 1px), linear-gradient(90deg, ${COLORS.border} 1px, transparent 1px); background-size: 42px 42px; }
         .nav-item { transition: background .15s, color .15s; cursor: pointer; }
         .row-hover:hover { background: ${COLORS.panelSoft} !important; }
+        .agenda-link:hover { background: ${COLORS.redDim}; }
         table { border-collapse: collapse; width: 100%; }
         th { position: sticky; top: 0; background: ${COLORS.panelAlt}; z-index: 1; }
         select option { background: ${COLORS.panel}; }
@@ -6070,7 +6194,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
               </div>
             </div>
 
-            <AgendaSemanal processos={filtrados} agendaItens={agendaItens} onOpenProcesso={(p) => setSelected(p)} onAddItem={addAgendaItem} onRemoveItem={removeAgendaItem} />
+            <AgendaSemanal processos={filtrados} todosProcessos={processos} agendaItens={agendaItens} onOpenProcesso={(p) => setSelected(p)} onAddItem={addAgendaItem} onRemoveItem={removeAgendaItem} />
 
             <div style={{ display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
               <PainelGrafico titulo={porClienteOuUnidade.label} subtitulo="Quantidade de processos e serviços no filtro atual" style={{ flex: "2 1 380px" }}>
@@ -6127,6 +6251,8 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
                   <thead><tr>
                     <Th campo="assunto" ordem={ordemBloq} ordenarPor={ordenarBloqPor} style={{ padding: "8px 18px" }}>Processo</Th>
                     <Th campo="cliente" ordem={ordemBloq} ordenarPor={ordenarBloqPor} style={{ padding: "8px 18px" }}>Cliente</Th>
+                    <Th campo="codigoUnidade" ordem={ordemBloq} ordenarPor={ordenarBloqPor} style={{ padding: "8px 18px" }}>Cód. unidade</Th>
+                    <Th campo="unidade" ordem={ordemBloq} ordenarPor={ordenarBloqPor} style={{ padding: "8px 18px" }}>Unidade</Th>
                     <Th campo="dep" ordem={ordemBloq} ordenarPor={ordenarBloqPor} style={{ padding: "8px 18px" }}>Depende da conclusão de</Th>
                     <Th campo="statusDep" ordem={ordemBloq} ordenarPor={ordenarBloqPor} style={{ padding: "8px 18px" }}>Status da dependência</Th>
                   </tr></thead>
@@ -6137,6 +6263,8 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
                         <tr key={p.id} className="row-hover" style={{ cursor: "pointer" }} onClick={() => setSelected(p)}>
                           <td style={{ padding: "10px 18px", fontSize: 13, color: COLORS.steelLight, borderBottom: `1px solid ${COLORS.border}` }}>{p.assunto}</td>
                           <td style={{ padding: "10px 18px", fontSize: 13, borderBottom: `1px solid ${COLORS.border}` }}>{p.cliente}</td>
+                          <td style={{ padding: "10px 18px", fontSize: 12.5, color: COLORS.steel, fontFamily: FONT_MONO, borderBottom: `1px solid ${COLORS.border}` }}>{codigosUnidade[`${p.cliente}|${p.unidade}`] || "—"}</td>
+                          <td style={{ padding: "10px 18px", fontSize: 13, color: COLORS.steelLight, borderBottom: `1px solid ${COLORS.border}` }}>{p.unidade}</td>
                           <td style={{ padding: "10px 18px", fontSize: 13, color: COLORS.steelLight, borderBottom: `1px solid ${COLORS.border}` }}>{bloqueio.assunto}</td>
                           <td style={{ padding: "10px 18px", borderBottom: `1px solid ${COLORS.border}` }}><Pill fg={stB.fg} bg={stB.bg}>{statusLabelDe(bloqueio)}</Pill></td>
                         </tr>
@@ -6152,6 +6280,8 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
               <table>
                 <thead><tr>
                   <Th campo="cliente" ordem={ordemUrg} ordenarPor={ordenarUrgPor} style={{ padding: "8px 18px" }}>Cliente</Th>
+                  <Th campo="codigoUnidade" ordem={ordemUrg} ordenarPor={ordenarUrgPor} style={{ padding: "8px 18px" }}>Cód. unidade</Th>
+                  <Th campo="unidade" ordem={ordemUrg} ordenarPor={ordenarUrgPor} style={{ padding: "8px 18px" }}>Unidade</Th>
                   <Th campo="assunto" ordem={ordemUrg} ordenarPor={ordenarUrgPor} style={{ padding: "8px 18px" }}>Assunto</Th>
                   <Th campo="status" ordem={ordemUrg} ordenarPor={ordenarUrgPor} style={{ padding: "8px 18px" }}>Status</Th>
                   <Th campo="dr" ordem={ordemUrg} ordenarPor={ordenarUrgPor} style={{ padding: "8px 18px" }}>Prazo</Th>
@@ -6163,6 +6293,8 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
                     return (
                       <tr key={p.id} className="row-hover" style={{ cursor: "pointer" }} onClick={() => setSelected(p)}>
                         <td style={{ padding: "10px 18px", fontSize: 13, borderBottom: `1px solid ${COLORS.border}` }}>{p.cliente}</td>
+                        <td style={{ padding: "10px 18px", fontSize: 12.5, color: COLORS.steel, fontFamily: FONT_MONO, borderBottom: `1px solid ${COLORS.border}` }}>{codigosUnidade[`${p.cliente}|${p.unidade}`] || "—"}</td>
+                        <td style={{ padding: "10px 18px", fontSize: 13, color: COLORS.steelLight, borderBottom: `1px solid ${COLORS.border}` }}>{p.unidade}</td>
                         <td style={{ padding: "10px 18px", fontSize: 13, color: COLORS.steelLight, borderBottom: `1px solid ${COLORS.border}` }}>{p.assunto}</td>
                         <td style={{ padding: "10px 18px", borderBottom: `1px solid ${COLORS.border}` }}><Pill fg={st.fg} bg={st.bg}>{statusLabelDe(p)}</Pill></td>
                         <td style={{ padding: "10px 18px", borderBottom: `1px solid ${COLORS.border}` }}><Pill fg={prazo.fg} bg={prazo.bg}>{prazo.label}</Pill></td>
@@ -6170,7 +6302,7 @@ function ControleProcessos({ usuarioLogado, onLogout, logoBase64, onLogoAtualiza
                       </tr>
                     );
                   })}
-                  {urgentes.length === 0 && <tr><td colSpan={5} style={{ padding: 20, textAlign: "center", color: COLORS.steel, fontSize: 13 }}>Nenhum processo com prazo em aberto.</td></tr>}
+                  {urgentes.length === 0 && <tr><td colSpan={7} style={{ padding: 20, textAlign: "center", color: COLORS.steel, fontSize: 13 }}>Nenhum processo com prazo em aberto.</td></tr>}
                 </tbody>
               </table>
             </div>
